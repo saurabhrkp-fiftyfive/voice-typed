@@ -121,3 +121,66 @@ def test_inject_paste_mode(monkeypatch):
         cmds = [c.args[0] for c in run.call_args_list]
         assert cmds[0][0] == "xclip"
         assert cmds[1][:2] == ["xdotool", "key"]
+
+
+def test_start_recording_spawns_pw_record(tmp_path):
+    wav = tmp_path / "sub" / "u.wav"
+    with mock.patch.object(vt.subprocess, "Popen") as popen:
+        vt.start_recording(wav)
+        cmd = popen.call_args.args[0]
+        assert cmd[0] == "pw-record"
+        assert "--rate" in cmd and "16000" in cmd
+        assert wav.parent.exists()
+
+
+def test_stop_recording_terminates_then_kills():
+    proc = mock.Mock()
+    proc.wait.side_effect = [vt.subprocess.TimeoutExpired("pw-record", 2), None]
+    vt.stop_recording(proc)
+    proc.terminate.assert_called_once()
+    proc.kill.assert_called_once()
+
+
+def test_handle_utterance_success_no_guard(wav_file, monkeypatch):
+    monkeypatch.setattr(vt, "transcribe", lambda p: "typed text")
+    injected = []
+    monkeypatch.setattr(vt, "inject", injected.append)
+    vt.handle_utterance(wav_file, None)  # window_id None -> guard skipped
+    assert injected == ["typed text"]
+    assert not wav_file.exists()  # cleaned up
+
+
+def test_handle_utterance_stt_failure_notifies_no_inject(wav_file, monkeypatch):
+    def boom(p):
+        raise vt.TranscribeError("down")
+    monkeypatch.setattr(vt, "transcribe", boom)
+    injected = []
+    monkeypatch.setattr(vt, "inject", injected.append)
+    notes = []
+    monkeypatch.setattr(vt, "notify", notes.append)
+    vt.handle_utterance(wav_file, None)  # must not raise
+    assert injected == []
+    assert any("fail" in n.lower() for n in notes)
+
+
+def test_handle_utterance_focus_changed_drops(wav_file, monkeypatch):
+    monkeypatch.setattr(vt, "transcribe", lambda p: "secret text")
+    monkeypatch.setattr(vt, "active_window", lambda: "999")
+    injected = []
+    monkeypatch.setattr(vt, "inject", injected.append)
+    notes = []
+    monkeypatch.setattr(vt, "notify", notes.append)
+    vt.handle_utterance(wav_file, "111")
+    assert injected == []
+    assert any("focus" in n.lower() for n in notes)
+
+
+def test_handle_utterance_inject_failure_contained(wav_file, monkeypatch):
+    monkeypatch.setattr(vt, "transcribe", lambda p: "text")
+    def boom(t):
+        raise FileNotFoundError("xdotool")
+    monkeypatch.setattr(vt, "inject", boom)
+    notes = []
+    monkeypatch.setattr(vt, "notify", notes.append)
+    vt.handle_utterance(wav_file, None)  # must not raise
+    assert any("inject" in n.lower() for n in notes)

@@ -94,3 +94,77 @@ def inject(text):
             ["xdotool", "type", "--clearmodifiers", "--delay", "2", "--", text],
             check=True, timeout=30,
         )
+
+
+def notify(msg):
+    try:
+        subprocess.run(
+            ["notify-send", "-t", "2000", "voice-typed", msg],
+            check=False, timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        print(f"voice-typed: {msg}", flush=True)
+
+
+def active_window():
+    try:
+        out = subprocess.run(
+            ["xdotool", "getactivewindow"],
+            capture_output=True, check=True, timeout=5,
+        )
+        return out.stdout.strip().decode()
+    except Exception:  # noqa: BLE001 — guard is best-effort
+        return None
+
+
+def start_recording(wav_path):
+    wav_path = Path(wav_path)
+    wav_path.parent.mkdir(parents=True, exist_ok=True)
+    return subprocess.Popen(
+        [
+            "pw-record", "--format", "s16", "--rate", "16000",
+            "--channels", "1", str(wav_path),
+        ]
+    )
+
+
+def stop_recording(proc):
+    try:
+        proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+    except OSError:
+        pass
+
+
+def handle_utterance(wav_path, window_id):
+    """Transcribe + inject one utterance. Never raises; deletes wav."""
+    try:
+        try:
+            text = transcribe(wav_path)
+        except TranscribeError as e:
+            notify(f"transcription failed: {e}")
+            return
+        if not text:
+            return  # silence -> type nothing
+        if window_id is not None:
+            current = active_window()
+            if current is not None and current != window_id:
+                notify(f"focus changed — dropped: {text[:60]}")
+                return
+        try:
+            inject(text)
+        except Exception as e:  # noqa: BLE001 — daemon must survive
+            notify(f"injection failed: {e}")
+    finally:
+        Path(wav_path).unlink(missing_ok=True)
+
+
+def stt_worker(q):
+    while True:
+        wav_path, window_id = q.get()
+        handle_utterance(wav_path, window_id)
+        q.task_done()
