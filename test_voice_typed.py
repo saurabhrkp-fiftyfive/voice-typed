@@ -184,3 +184,44 @@ def test_handle_utterance_inject_failure_contained(wav_file, monkeypatch):
     monkeypatch.setattr(vt, "notify", notes.append)
     vt.handle_utterance(wav_file, None)  # must not raise
     assert any("inject" in n.lower() for n in notes)
+
+
+def test_load_vocab_parses_comments_blanks(tmp_path):
+    v = tmp_path / "vocab.txt"
+    v.write_text("# names\nKubernetes\n\nSaurabh\nRedis\n")
+    p = vt.load_vocab(v)
+    assert p.startswith("Vocabulary: ")
+    assert "Kubernetes" in p and "Saurabh" in p and "Redis" in p
+    assert "#" not in p
+
+
+def test_load_vocab_missing_or_empty_returns_empty(tmp_path):
+    assert vt.load_vocab(tmp_path / "nope.txt") == ""
+    empty = tmp_path / "empty.txt"
+    empty.write_text("# only comment\n\n")
+    assert vt.load_vocab(empty) == ""
+
+
+def test_load_vocab_truncated(tmp_path):
+    v = tmp_path / "vocab.txt"
+    v.write_text("\n".join(f"word{i}" for i in range(500)))
+    assert len(vt.load_vocab(v)) <= vt.VOCAB_MAX_CHARS
+
+
+def test_transcribe_sends_vocab_prompt(wav_file, secrets_file, tmp_path, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    v = tmp_path / "vocab.txt"
+    v.write_text("Kubernetes\nPostgreSQL\n")
+    monkeypatch.setattr(vt, "VOCAB_PATH", v)
+    with mock.patch.object(vt.requests, "post", return_value=_resp()) as post:
+        vt.transcribe(wav_file)
+        prompt = post.call_args.kwargs["data"]["prompt"]
+        assert "Kubernetes" in prompt and "PostgreSQL" in prompt
+
+
+def test_transcribe_no_vocab_no_prompt_key(wav_file, secrets_file, tmp_path, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    monkeypatch.setattr(vt, "VOCAB_PATH", tmp_path / "nope.txt")
+    with mock.patch.object(vt.requests, "post", return_value=_resp()) as post:
+        vt.transcribe(wav_file)
+        assert "prompt" not in post.call_args.kwargs["data"]

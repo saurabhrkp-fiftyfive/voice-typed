@@ -17,6 +17,8 @@ import requests
 OPENAI_URL = "https://api.openai.com/v1/audio/transcriptions"
 GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 SECRETS_PATH = Path.home() / ".config" / "secrets.env"
+VOCAB_PATH = Path(__file__).resolve().parent / "vocab.txt"
+VOCAB_MAX_CHARS = 800  # ~200 tokens; whisper prompt cap is 224 tokens
 MAX_UTTERANCE_S = 60
 API_TIMEOUT_S = 30  # per-engine connect+read timeout, NOT total deadline
 
@@ -41,13 +43,31 @@ def load_secrets(path=None):
     return secrets
 
 
-def _stt_request(url, key, model, wav_path, timeout):
+def load_vocab(path=None):
+    """Domain words (one per line, # comments) -> STT bias prompt, "" if none."""
+    path = Path(path or VOCAB_PATH)
+    try:
+        words = [
+            w.strip() for w in path.read_text().splitlines()
+            if w.strip() and not w.strip().startswith("#")
+        ]
+    except OSError:
+        return ""
+    if not words:
+        return ""
+    return ("Vocabulary: " + ", ".join(words))[:VOCAB_MAX_CHARS]
+
+
+def _stt_request(url, key, model, wav_path, timeout, prompt=""):
+    data = {"model": model}
+    if prompt:
+        data["prompt"] = prompt
     with open(wav_path, "rb") as f:
         r = requests.post(
             url,
             headers={"Authorization": f"Bearer {key}"},
             files={"file": ("utterance.wav", f, "audio/wav")},
-            data={"model": model},
+            data=data,
             timeout=timeout,
         )
     r.raise_for_status()
@@ -68,10 +88,11 @@ def transcribe(wav_path, timeout=API_TIMEOUT_S):
         raise TranscribeError(
             "no API keys — need OPENAI_API_KEY and/or GROQ_API_KEY in secrets.env"
         )
+    prompt = load_vocab()
     last_err = None
     for url, key, model in configured:
         try:
-            return _stt_request(url, key, model, wav_path, timeout)
+            return _stt_request(url, key, model, wav_path, timeout, prompt)
         except Exception as e:  # noqa: BLE001 — any engine error -> next engine
             last_err = e
     raise TranscribeError(f"all engines failed: {last_err}")
