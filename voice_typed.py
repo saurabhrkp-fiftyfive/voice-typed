@@ -168,3 +168,93 @@ def stt_worker(q):
         wav_path, window_id = q.get()
         handle_utterance(wav_path, window_id)
         q.task_done()
+
+
+def find_keyboards(keycode):
+    import evdev
+    devs, denied = [], 0
+    for path in evdev.list_devices():
+        try:
+            d = evdev.InputDevice(path)
+        except (PermissionError, OSError):
+            denied += 1
+            continue
+        if keycode in d.capabilities().get(evdev.ecodes.EV_KEY, []):
+            devs.append(d)
+        else:
+            d.close()
+    return devs, denied
+
+
+def main():
+    import select
+    from evdev import ecodes
+
+    keyname = os.environ.get("VOICE_TYPED_KEY", "KEY_F9")
+    keycode = getattr(ecodes, keyname, None)
+    if keycode is None:
+        sys.exit(f"unknown VOICE_TYPED_KEY: {keyname}")
+    devs, denied = find_keyboards(keycode)
+    if not devs:
+        sys.exit(
+            f"no readable keyboard with {keyname} ({denied} device(s) denied). "
+            "Is the user in the 'input' group? (sudo usermod -aG input $USER, re-login)"
+        )
+    run_dir = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "voice-typed"
+    q = queue.Queue()
+    threading.Thread(target=stt_worker, args=(q,), daemon=True).start()
+
+    rec = None            # active pw-record Popen or None
+    wav = None            # Path of in-flight recording
+    deadline = 0.0        # monotonic cutoff for 60s cap
+    awaiting_release = False  # cap fired while key held; swallow next keyup
+
+    print(f"voice-typed: {len(devs)} device(s), key={keyname}", flush=True)
+    while True:
+        if rec is None:
+            timeout = 1.0
+        else:
+            timeout = max(0.05, min(1.0, deadline - time.monotonic()))
+        r, _, _ = select.select(devs, [], [], timeout)
+
+        if rec is not None:
+            if rec.poll() is not None:  # recorder died mid-recording
+                notify(f"recorder died (exit {rec.returncode})")
+                rec = None
+            elif time.monotonic() >= deadline:  # 60s cap
+                stop_recording(rec)
+                rec = None
+                awaiting_release = True
+                notify("60s cap — transcribing")
+                q.put((wav, active_window()))
+
+        for d in r:
+            try:
+                events = list(d.read())
+            except OSError:
+                continue
+            for ev in events:
+                if ev.type != ecodes.EV_KEY or ev.code != keycode:
+                    continue
+                if ev.value == 1 and rec is None and not awaiting_release:
+                    wav = run_dir / f"utt-{int(time.time() * 1000)}.wav"
+                    try:
+                        rec = start_recording(wav)
+                    except OSError as e:
+                        notify(f"recorder start failed: {e}")
+                        rec = None
+                        continue
+                    deadline = time.monotonic() + MAX_UTTERANCE_S
+                    notify("🎙 recording")
+                elif ev.value == 0:  # keyup (value 2 autorepeat ignored)
+                    if awaiting_release:
+                        awaiting_release = False
+                    elif rec is not None:
+                        stop_recording(rec)
+                        rec = None
+                        notify("… transcribing")
+                        q.put((wav, active_window()))
+
+
+if __name__ == "__main__":
+    main()
