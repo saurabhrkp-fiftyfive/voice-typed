@@ -95,3 +95,29 @@ def test_transcribe_no_keys_raises_clear_error(wav_file, tmp_path, monkeypatch):
     monkeypatch.setattr(vt, "SECRETS_PATH", empty)
     with pytest.raises(vt.TranscribeError, match="OPENAI_API_KEY"):
         vt.transcribe(wav_file)
+
+
+def test_inject_empty_is_noop():
+    with mock.patch.object(vt.subprocess, "run") as run:
+        vt.inject("   \n")
+        run.assert_not_called()
+
+
+def test_inject_types_via_xdotool(monkeypatch):
+    monkeypatch.delenv("VOICE_TYPED_PASTE", raising=False)
+    with mock.patch.object(vt.subprocess, "run") as run:
+        vt.inject("hello world")
+        cmd = run.call_args.args[0]
+        assert cmd[:2] == ["xdotool", "type"]
+        assert "--clearmodifiers" in cmd
+        assert cmd[-1] == "hello world"
+        assert run.call_args.kwargs["timeout"] == 30
+
+
+def test_inject_paste_mode(monkeypatch):
+    monkeypatch.setenv("VOICE_TYPED_PASTE", "1")
+    with mock.patch.object(vt.subprocess, "run") as run:
+        vt.inject("hello")
+        cmds = [c.args[0] for c in run.call_args_list]
+        assert cmds[0][0] == "xclip"
+        assert cmds[1][:2] == ["xdotool", "key"]

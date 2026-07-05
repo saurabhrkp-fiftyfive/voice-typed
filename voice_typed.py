@@ -75,3 +75,22 @@ def transcribe(wav_path, timeout=API_TIMEOUT_S):
         except Exception as e:  # noqa: BLE001 — any engine error -> next engine
             last_err = e
     raise TranscribeError(f"all engines failed: {last_err}")
+
+
+def inject(text):
+    if not text or not text.strip():
+        return
+    if os.environ.get("VOICE_TYPED_PASTE") == "1":
+        subprocess.run(
+            ["xclip", "-selection", "clipboard"],
+            input=text.encode(), check=True, timeout=10,
+        )
+        subprocess.run(
+            ["xdotool", "key", "--clearmodifiers", "ctrl+v"],
+            check=True, timeout=10,
+        )
+    else:
+        subprocess.run(
+            ["xdotool", "type", "--clearmodifiers", "--delay", "2", "--", text],
+            check=True, timeout=30,
+        )
