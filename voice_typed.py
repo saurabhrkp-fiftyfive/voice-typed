@@ -6,6 +6,7 @@ focused window via xdotool. STT: OpenAI gpt-4o-transcribe, Groq fallback.
 """
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -19,6 +20,9 @@ GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 SECRETS_PATH = Path.home() / ".config" / "secrets.env"
 VOCAB_PATH = Path(__file__).resolve().parent / "vocab.txt"
 VOCAB_MAX_CHARS = 800  # ~200 tokens; whisper prompt cap is 224 tokens
+CORRECTIONS_PATH = Path(__file__).resolve().parent / "corrections.txt"
+FLAGGED_PATH = Path(__file__).resolve().parent / "flagged.md"
+LAST_TEXT = ""  # last typed transcript, held in memory for ⚑ flagging only
 MAX_UTTERANCE_S = 60
 API_TIMEOUT_S = 30  # per-engine connect+read timeout, NOT total deadline
 
@@ -117,6 +121,45 @@ def inject(text):
         )
 
 
+def load_corrections(path=None):
+    """corrections.txt: 'wrong => right' per line, # comments. [] if missing."""
+    path = Path(path or CORRECTIONS_PATH)
+    pairs = []
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return pairs
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=>" not in line:
+            continue
+        wrong, right = line.split("=>", 1)
+        wrong, right = wrong.strip(), right.strip()
+        if wrong:
+            pairs.append((wrong, right))
+    return pairs
+
+
+def apply_corrections(text, path=None):
+    for wrong, right in load_corrections(path):
+        text = re.sub(rf"\b{re.escape(wrong)}\b", right, text, flags=re.IGNORECASE)
+    return text
+
+
+def flag_last():
+    """Append last typed utterance to flagged.md for later correction."""
+    if not LAST_TEXT:
+        notify("nothing to flag")
+        return
+    ts = time.strftime("%Y-%m-%d %H:%M")
+    try:
+        with open(FLAGGED_PATH, "a") as f:
+            f.write(f'- {ts} ⚑ "{LAST_TEXT}" → \n')
+        notify(f"⚑ flagged: {LAST_TEXT[:40]}")
+    except OSError as e:
+        notify(f"flag write failed: {e}")
+
+
 def notify(msg):
     try:
         subprocess.run(
@@ -171,6 +214,9 @@ def handle_utterance(wav_path, window_id):
             return
         if not text:
             return  # silence -> type nothing
+        text = apply_corrections(text)
+        global LAST_TEXT
+        LAST_TEXT = text
         if window_id is not None:
             current = active_window()
             if current is not None and current != window_id:
@@ -215,6 +261,10 @@ def main():
     keycode = getattr(ecodes, keyname, None)
     if keycode is None:
         sys.exit(f"unknown VOICE_TYPED_KEY: {keyname}")
+    flagname = os.environ.get("VOICE_TYPED_FLAG_KEY", "KEY_F10")
+    flagcode = getattr(ecodes, flagname, None)
+    if flagcode is None:
+        sys.exit(f"unknown VOICE_TYPED_FLAG_KEY: {flagname}")
     devs, denied = find_keyboards(keycode)
     if not devs:
         sys.exit(
@@ -255,7 +305,11 @@ def main():
             except OSError:
                 continue
             for ev in events:
-                if ev.type != ecodes.EV_KEY or ev.code != keycode:
+                if ev.type != ecodes.EV_KEY or ev.code not in (keycode, flagcode):
+                    continue
+                if ev.code == flagcode:
+                    if ev.value == 1:
+                        flag_last()
                     continue
                 if ev.value == 1 and rec is None and not awaiting_release:
                     wav = run_dir / f"utt-{int(time.time() * 1000)}.wav"

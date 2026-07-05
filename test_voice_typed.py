@@ -225,3 +225,45 @@ def test_transcribe_no_vocab_no_prompt_key(wav_file, secrets_file, tmp_path, mon
     with mock.patch.object(vt.requests, "post", return_value=_resp()) as post:
         vt.transcribe(wav_file)
         assert "prompt" not in post.call_args.kwargs["data"]
+
+
+def test_load_corrections_and_apply(tmp_path):
+    c = tmp_path / "corrections.txt"
+    c.write_text("# fixes\njee brain => Redis\nhyd => Kubernetes\n")
+    assert vt.apply_corrections("Jee Brain and hyd rock", c) == "Redis and Kubernetes rock"
+
+
+def test_apply_corrections_missing_file_passthrough(tmp_path):
+    assert vt.apply_corrections("hello", tmp_path / "nope.txt") == "hello"
+
+
+def test_handle_utterance_applies_corrections(wav_file, monkeypatch, tmp_path):
+    monkeypatch.setattr(vt, "transcribe", lambda p: "jee brain")
+    c = tmp_path / "c.txt"
+    c.write_text("jee brain => Redis\n")
+    monkeypatch.setattr(vt, "CORRECTIONS_PATH", c)
+    injected = []
+    monkeypatch.setattr(vt, "inject", injected.append)
+    vt.handle_utterance(wav_file, None)
+    assert injected == ["Redis"]
+
+
+def test_flag_last_appends_to_flagged_md(tmp_path, monkeypatch):
+    monkeypatch.setattr(vt, "FLAGGED_PATH", tmp_path / "flagged.md")
+    monkeypatch.setattr(vt, "LAST_TEXT", "jee brain rocks")
+    notes = []
+    monkeypatch.setattr(vt, "notify", notes.append)
+    vt.flag_last()
+    content = (tmp_path / "flagged.md").read_text()
+    assert "jee brain rocks" in content and "⚑" in content
+    assert any("flagged" in n for n in notes)
+
+
+def test_flag_last_empty_notifies_no_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(vt, "FLAGGED_PATH", tmp_path / "flagged.md")
+    monkeypatch.setattr(vt, "LAST_TEXT", "")
+    notes = []
+    monkeypatch.setattr(vt, "notify", notes.append)
+    vt.flag_last()
+    assert not (tmp_path / "flagged.md").exists()
+    assert notes
