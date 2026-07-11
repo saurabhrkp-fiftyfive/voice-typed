@@ -116,11 +116,33 @@ def test_inject_types_via_xdotool(monkeypatch):
 
 def test_inject_paste_mode(monkeypatch):
     monkeypatch.setenv("VOICE_TYPED_PASTE", "1")
+    monkeypatch.setattr(vt, "active_window_class", lambda: "google-chrome")
     with mock.patch.object(vt.subprocess, "run") as run:
         vt.inject("hello")
         cmds = [c.args[0] for c in run.call_args_list]
         assert cmds[0][0] == "xclip"
         assert cmds[1][:2] == ["xdotool", "key"]
+        assert cmds[1][-1] == "ctrl+v"
+
+
+def test_paste_chord_terminal_uses_shift(monkeypatch):
+    for cls in ("gnome-terminal-server", "kitty", "org.wezfurlong.wezterm"):
+        monkeypatch.setattr(vt, "active_window_class", lambda c=cls: c)
+        assert vt.paste_chord() == "ctrl+shift+v"
+
+
+def test_paste_chord_gui_uses_plain(monkeypatch):
+    for cls in ("google-chrome", "obsidian", "code", ""):
+        monkeypatch.setattr(vt, "active_window_class", lambda c=cls: c)
+        assert vt.paste_chord() == "ctrl+v"
+
+
+def test_inject_terminal_paste_sends_shift_chord(monkeypatch):
+    monkeypatch.setattr(vt, "active_window_class", lambda: "gnome-terminal-server")
+    with mock.patch.object(vt.subprocess, "run") as run:
+        vt.inject("## Task\nprompt", force_paste=True)
+        cmds = [c.args[0] for c in run.call_args_list]
+        assert cmds[1][-1] == "ctrl+shift+v"
 
 
 def test_start_recording_spawns_pw_record(tmp_path):
@@ -326,6 +348,7 @@ def test_enhance_prompt_model_env_override(secrets_file, monkeypatch):
 
 def test_inject_force_paste_overrides_type(monkeypatch):
     monkeypatch.delenv("VOICE_TYPED_PASTE", raising=False)
+    monkeypatch.setattr(vt, "active_window_class", lambda: "obsidian")
     with mock.patch.object(vt.subprocess, "run") as run:
         vt.inject("multi\nline", force_paste=True)
         cmds = [c.args[0] for c in run.call_args_list]

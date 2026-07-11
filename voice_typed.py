@@ -165,6 +165,31 @@ def enhance_prompt(text, timeout=API_TIMEOUT_S):
     raise EnhanceError(f"all engines failed: {last_err}")
 
 
+# terminals paste with ctrl+shift+v (ctrl+v is verbatim-insert / image paste there)
+TERMINAL_CLASS_HINTS = (
+    "terminal", "kitty", "alacritty", "konsole", "xterm", "tilix",
+    "terminator", "wezterm", "st-256color", "ptyxis", "foot", "urxvt",
+)
+
+
+def active_window_class():
+    try:
+        out = subprocess.run(
+            ["xdotool", "getactivewindow", "getwindowclassname"],
+            capture_output=True, check=True, timeout=5,
+        )
+        return out.stdout.strip().decode().lower()
+    except Exception:  # noqa: BLE001 — guard is best-effort
+        return ""
+
+
+def paste_chord():
+    cls = active_window_class()
+    if any(h in cls for h in TERMINAL_CLASS_HINTS):
+        return "ctrl+shift+v"
+    return "ctrl+v"
+
+
 def inject(text, force_paste=False):
     if not text or not text.strip():
         return
@@ -174,7 +199,7 @@ def inject(text, force_paste=False):
             input=text.encode(), check=True, timeout=10,
         )
         subprocess.run(
-            ["xdotool", "key", "--clearmodifiers", "ctrl+v"],
+            ["xdotool", "key", "--clearmodifiers", paste_chord()],
             check=True, timeout=10,
         )
     else:
