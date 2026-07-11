@@ -17,6 +17,20 @@ import requests
 
 OPENAI_URL = "https://api.openai.com/v1/audio/transcriptions"
 GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
+OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
+GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_ENHANCE_MODEL = "llama-3.3-70b-versatile"
+ENHANCE_SYSTEM = """\
+You rewrite raw dictated speech into a clear, well-structured prompt for an AI coding agent.
+
+Rules:
+- Preserve the speaker's intent and every technical detail exactly: file names, commands, error messages, names, numbers.
+- Never add requirements, constraints, or facts the speaker did not say.
+- Remove filler words, false starts, and repetition.
+- Short simple request -> one tightened paragraph, no headings.
+- Long or multi-part request -> markdown sections: ## Task, ## Constraints, ## Expected output (omit empty sections).
+- Output ONLY the rewritten prompt. No preamble, no commentary, no code fences around the output.
+"""
 SECRETS_PATH = Path.home() / ".config" / "secrets.env"
 VOCAB_PATH = Path(__file__).resolve().parent / "vocab.txt"
 VOCAB_MAX_CHARS = 800  # ~200 tokens; whisper prompt cap is 224 tokens
@@ -28,6 +42,10 @@ API_TIMEOUT_S = 30  # per-engine connect+read timeout, NOT total deadline
 
 
 class TranscribeError(Exception):
+    pass
+
+
+class EnhanceError(Exception):
     pass
 
 
@@ -102,10 +120,55 @@ def transcribe(wav_path, timeout=API_TIMEOUT_S):
     raise TranscribeError(f"all engines failed: {last_err}")
 
 
-def inject(text):
+def _chat_request(url, key, model, text, timeout):
+    r = requests.post(
+        url,
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": model,
+            "messages": [
+                {"role": "system", "content": ENHANCE_SYSTEM},
+                {"role": "user", "content": text},
+            ],
+            "temperature": 0.3,
+        },
+        timeout=timeout,
+    )
+    r.raise_for_status()
+    return r.json()["choices"][0]["message"]["content"].strip()
+
+
+def enhance_prompt(text, timeout=API_TIMEOUT_S):
+    try:
+        secrets = load_secrets()
+    except OSError as e:
+        raise EnhanceError(f"cannot read secrets: {e}") from e
+    model = os.environ.get("VOICE_TYPED_ENHANCE_MODEL", "gpt-4o-mini")
+    engines = [
+        (OPENAI_CHAT_URL, secrets.get("OPENAI_API_KEY"), model),
+        (GROQ_CHAT_URL, secrets.get("GROQ_API_KEY"), GROQ_ENHANCE_MODEL),
+    ]
+    configured = [(u, k, m) for u, k, m in engines if k]
+    if not configured:
+        raise EnhanceError(
+            "no API keys — need OPENAI_API_KEY and/or GROQ_API_KEY in secrets.env"
+        )
+    last_err = None
+    for url, key, m in configured:
+        try:
+            out = _chat_request(url, key, m, text, timeout)
+            if out:
+                return out
+            last_err = EnhanceError("empty completion")
+        except Exception as e:  # noqa: BLE001 — any engine error -> next engine
+            last_err = e
+    raise EnhanceError(f"all engines failed: {last_err}")
+
+
+def inject(text, force_paste=False):
     if not text or not text.strip():
         return
-    if os.environ.get("VOICE_TYPED_PASTE") == "1":
+    if force_paste or os.environ.get("VOICE_TYPED_PASTE") == "1":
         subprocess.run(
             ["xclip", "-selection", "clipboard"],
             input=text.encode(), check=True, timeout=10,
@@ -204,7 +267,7 @@ def stop_recording(proc):
         pass
 
 
-def handle_utterance(wav_path, window_id):
+def handle_utterance(wav_path, window_id, enhance=False):
     """Transcribe + inject one utterance. Never raises; deletes wav."""
     try:
         try:
@@ -215,6 +278,18 @@ def handle_utterance(wav_path, window_id):
         if not text:
             return  # silence -> type nothing
         text = apply_corrections(text)
+        print(
+            f"voice-typed: utterance enhance={enhance} text={text[:60]!r}",
+            flush=True,
+        )
+        if enhance:
+            notify("✨ enhancing")
+            try:
+                text = enhance_prompt(text)
+                print(f"voice-typed: enhanced -> {text[:60]!r}", flush=True)
+            except EnhanceError as e:
+                notify(f"enhance failed — raw text: {e}")
+                print(f"voice-typed: enhance FAILED: {e}", flush=True)
         global LAST_TEXT
         LAST_TEXT = text
         if window_id is not None:
@@ -223,7 +298,8 @@ def handle_utterance(wav_path, window_id):
                 notify(f"focus changed — dropped: {text[:60]}")
                 return
         try:
-            inject(text)
+            # multi-line prompts must paste: xdotool type sends Return per newline
+            inject(text, force_paste=enhance)
         except Exception as e:  # noqa: BLE001 — daemon must survive
             notify(f"injection failed: {e}")
     finally:
@@ -232,8 +308,8 @@ def handle_utterance(wav_path, window_id):
 
 def stt_worker(q):
     while True:
-        wav_path, window_id = q.get()
-        handle_utterance(wav_path, window_id)
+        wav_path, window_id, enhance = q.get()
+        handle_utterance(wav_path, window_id, enhance)
         q.task_done()
 
 
@@ -265,6 +341,10 @@ def main():
     flagcode = getattr(ecodes, flagname, None)
     if flagcode is None:
         sys.exit(f"unknown VOICE_TYPED_FLAG_KEY: {flagname}")
+    enhname = os.environ.get("VOICE_TYPED_ENHANCE_KEY", "KEY_F8")
+    enhcode = getattr(ecodes, enhname, None)
+    if enhcode is None:
+        sys.exit(f"unknown VOICE_TYPED_ENHANCE_KEY: {enhname}")
     devs, denied = find_keyboards(keycode)
     if not devs:
         sys.exit(
@@ -279,8 +359,12 @@ def main():
     wav = None            # Path of in-flight recording
     deadline = 0.0        # monotonic cutoff for 60s cap
     awaiting_release = False  # cap fired while key held; swallow next keyup
+    rec_key = None        # keycode that started the in-flight recording
 
-    print(f"voice-typed: {len(devs)} device(s), key={keyname}", flush=True)
+    print(
+        f"voice-typed: {len(devs)} device(s), key={keyname}, enhance={enhname}",
+        flush=True,
+    )
     while True:
         if rec is None:
             timeout = 1.0
@@ -297,15 +381,22 @@ def main():
                 rec = None
                 awaiting_release = True
                 notify("60s cap — transcribing")
-                q.put((wav, active_window()))
+                q.put((wav, active_window(), rec_key == enhcode))
 
         for d in r:
             try:
                 events = list(d.read())
-            except OSError:
+            except OSError:  # device unplugged/reconnected — drop dead fd, don't spin on it
+                devs.remove(d)
+                d.close()
+                if not devs:
+                    notify("all input devices lost — exiting")
+                    sys.exit(1)
                 continue
             for ev in events:
-                if ev.type != ecodes.EV_KEY or ev.code not in (keycode, flagcode):
+                if ev.type != ecodes.EV_KEY or ev.code not in (
+                    keycode, flagcode, enhcode,
+                ):
                     continue
                 if ev.code == flagcode:
                     if ev.value == 1:
@@ -319,16 +410,27 @@ def main():
                         notify(f"recorder start failed: {e}")
                         rec = None
                         continue
+                    rec_key = ev.code
                     deadline = time.monotonic() + MAX_UTTERANCE_S
-                    notify("🎙 recording")
-                elif ev.value == 0:  # keyup (value 2 autorepeat ignored)
+                    print(
+                        f"voice-typed: keydown code={ev.code} enhance={ev.code == enhcode}",
+                        flush=True,
+                    )
+                    notify(
+                        "🎙 recording (enhance)" if ev.code == enhcode
+                        else "🎙 recording"
+                    )
+                elif ev.value == 0 and ev.code == rec_key:
+                    # keyup (value 2 autorepeat ignored); other key's keyup ignored
                     if awaiting_release:
                         awaiting_release = False
+                        rec_key = None
                     elif rec is not None:
                         stop_recording(rec)
                         rec = None
                         notify("… transcribing")
-                        q.put((wav, active_window()))
+                        q.put((wav, active_window(), rec_key == enhcode))
+                        rec_key = None
 
 
 if __name__ == "__main__":

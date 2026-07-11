@@ -144,7 +144,7 @@ def test_stop_recording_terminates_then_kills():
 def test_handle_utterance_success_no_guard(wav_file, monkeypatch):
     monkeypatch.setattr(vt, "transcribe", lambda p: "typed text")
     injected = []
-    monkeypatch.setattr(vt, "inject", injected.append)
+    monkeypatch.setattr(vt, "inject", lambda t, force_paste=False: injected.append(t))
     vt.handle_utterance(wav_file, None)  # window_id None -> guard skipped
     assert injected == ["typed text"]
     assert not wav_file.exists()  # cleaned up
@@ -177,7 +177,7 @@ def test_handle_utterance_focus_changed_drops(wav_file, monkeypatch):
 
 def test_handle_utterance_inject_failure_contained(wav_file, monkeypatch):
     monkeypatch.setattr(vt, "transcribe", lambda p: "text")
-    def boom(t):
+    def boom(t, force_paste=False):
         raise FileNotFoundError("xdotool")
     monkeypatch.setattr(vt, "inject", boom)
     notes = []
@@ -243,7 +243,7 @@ def test_handle_utterance_applies_corrections(wav_file, monkeypatch, tmp_path):
     c.write_text("jee brain => Redis\n")
     monkeypatch.setattr(vt, "CORRECTIONS_PATH", c)
     injected = []
-    monkeypatch.setattr(vt, "inject", injected.append)
+    monkeypatch.setattr(vt, "inject", lambda t, force_paste=False: injected.append(t))
     vt.handle_utterance(wav_file, None)
     assert injected == ["Redis"]
 
@@ -267,3 +267,108 @@ def test_flag_last_empty_notifies_no_file(tmp_path, monkeypatch):
     vt.flag_last()
     assert not (tmp_path / "flagged.md").exists()
     assert notes
+
+
+def _chat_resp(status=200, content="engineered prompt"):
+    r = mock.Mock()
+    r.status_code = status
+    r.json.return_value = {"choices": [{"message": {"content": content}}]}
+    if status >= 400:
+        r.raise_for_status.side_effect = requests.HTTPError(str(status))
+    else:
+        r.raise_for_status.return_value = None
+    return r
+
+
+def test_enhance_prompt_openai_request_shape(secrets_file, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    monkeypatch.delenv("VOICE_TYPED_ENHANCE_MODEL", raising=False)
+    with mock.patch.object(vt.requests, "post", return_value=_chat_resp()) as post:
+        assert vt.enhance_prompt("fix bug") == "engineered prompt"
+        call = post.call_args
+        assert call.args[0] == vt.OPENAI_CHAT_URL
+        assert call.kwargs["headers"]["Authorization"] == "Bearer sk-test"
+        body = call.kwargs["json"]
+        assert body["model"] == "gpt-4o-mini"
+        assert body["messages"][0]["role"] == "system"
+        assert body["messages"][1] == {"role": "user", "content": "fix bug"}
+        assert call.kwargs["timeout"] == vt.API_TIMEOUT_S
+
+
+def test_enhance_prompt_falls_back_to_groq(secrets_file, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    with mock.patch.object(
+        vt.requests, "post",
+        side_effect=[_chat_resp(500), _chat_resp(content="via groq")],
+    ) as post:
+        assert vt.enhance_prompt("fix bug") == "via groq"
+        assert post.call_args_list[0].args[0] == vt.OPENAI_CHAT_URL
+        assert post.call_args_list[1].args[0] == vt.GROQ_CHAT_URL
+        assert post.call_args_list[1].kwargs["json"]["model"] == vt.GROQ_ENHANCE_MODEL
+
+
+def test_enhance_prompt_both_fail_raises(secrets_file, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    with mock.patch.object(
+        vt.requests, "post", side_effect=[_chat_resp(500), _chat_resp(500)]
+    ):
+        with pytest.raises(vt.EnhanceError, match="all engines failed"):
+            vt.enhance_prompt("fix bug")
+
+
+def test_enhance_prompt_model_env_override(secrets_file, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    monkeypatch.setenv("VOICE_TYPED_ENHANCE_MODEL", "gpt-5-mini")
+    with mock.patch.object(vt.requests, "post", return_value=_chat_resp()) as post:
+        vt.enhance_prompt("x")
+        assert post.call_args.kwargs["json"]["model"] == "gpt-5-mini"
+
+
+def test_inject_force_paste_overrides_type(monkeypatch):
+    monkeypatch.delenv("VOICE_TYPED_PASTE", raising=False)
+    with mock.patch.object(vt.subprocess, "run") as run:
+        vt.inject("multi\nline", force_paste=True)
+        cmds = [c.args[0] for c in run.call_args_list]
+        assert cmds[0][0] == "xclip"
+        assert cmds[1][:2] == ["xdotool", "key"]
+
+
+def test_handle_utterance_enhance_forces_paste(wav_file, monkeypatch):
+    monkeypatch.setattr(vt, "transcribe", lambda p: "raw ramble")
+    monkeypatch.setattr(vt, "enhance_prompt", lambda t: "## Task\nclean prompt")
+    calls = []
+    monkeypatch.setattr(
+        vt, "inject", lambda t, force_paste=False: calls.append((t, force_paste))
+    )
+    vt.handle_utterance(wav_file, None, enhance=True)
+    assert calls == [("## Task\nclean prompt", True)]
+    assert vt.LAST_TEXT == "## Task\nclean prompt"
+
+
+def test_handle_utterance_enhance_failure_injects_raw(wav_file, monkeypatch):
+    monkeypatch.setattr(vt, "transcribe", lambda p: "raw ramble")
+    def boom(t):
+        raise vt.EnhanceError("down")
+    monkeypatch.setattr(vt, "enhance_prompt", boom)
+    calls = []
+    monkeypatch.setattr(
+        vt, "inject", lambda t, force_paste=False: calls.append((t, force_paste))
+    )
+    notes = []
+    monkeypatch.setattr(vt, "notify", notes.append)
+    vt.handle_utterance(wav_file, None, enhance=True)
+    assert calls == [("raw ramble", True)]
+    assert any("enhance failed" in n for n in notes)
+
+
+def test_handle_utterance_plain_never_enhances(wav_file, monkeypatch):
+    monkeypatch.setattr(vt, "transcribe", lambda p: "plain")
+    def boom(t):
+        raise AssertionError("enhance called in plain mode")
+    monkeypatch.setattr(vt, "enhance_prompt", boom)
+    calls = []
+    monkeypatch.setattr(
+        vt, "inject", lambda t, force_paste=False: calls.append((t, force_paste))
+    )
+    vt.handle_utterance(wav_file, None)
+    assert calls == [("plain", False)]
