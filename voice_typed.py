@@ -338,6 +338,29 @@ def stt_worker(q):
         q.task_done()
 
 
+def x11_grab_key(keyname):
+    """Grab key at X11 level so the focused app never sees it (evdev still does).
+
+    Best-effort: any failure logs and leaves behavior as before (key leaks).
+    Runs forever discarding the grabbed events — call in a daemon thread.
+    """
+    try:
+        from Xlib import X, XK, display
+        d = display.Display()
+        keysym = XK.string_to_keysym(keyname.replace("KEY_", "", 1))
+        code = d.keysym_to_keycode(keysym)
+        if not code:
+            raise ValueError(f"no X keycode for {keyname}")
+        root = d.screen().root
+        root.grab_key(code, X.AnyModifier, False, X.GrabModeAsync, X.GrabModeAsync)
+        d.sync()
+        print(f"voice-typed: X11 grab active on {keyname}", flush=True)
+        while True:
+            d.next_event()  # discard — grab exists only to swallow the key
+    except Exception as e:  # noqa: BLE001 — grab is optional, daemon must run
+        print(f"voice-typed: X11 grab failed for {keyname}: {e}", flush=True)
+
+
 def find_keyboards(keycode):
     import evdev
     devs, denied = [], 0
@@ -379,6 +402,8 @@ def main():
     run_dir = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "voice-typed"
     q = queue.Queue()
     threading.Thread(target=stt_worker, args=(q,), daemon=True).start()
+    if os.environ.get("VOICE_TYPED_GRAB", "1") != "0":
+        threading.Thread(target=x11_grab_key, args=(enhname,), daemon=True).start()
 
     rec = None            # active pw-record Popen or None
     wav = None            # Path of in-flight recording
