@@ -355,6 +355,20 @@ def test_enhance_prompt_model_env_override(secrets_file, monkeypatch):
         assert post.call_args.kwargs["json"]["model"] == "gpt-5-mini"
 
 
+def test_enhance_prompt_task_uses_enhance_system(secrets_file, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    with mock.patch.object(vt.requests, "post", return_value=_chat_resp()) as post:
+        vt.enhance_prompt("x")  # default mode="task"
+        assert post.call_args.kwargs["json"]["messages"][0]["content"] == vt.ENHANCE_SYSTEM
+
+
+def test_enhance_prompt_followup_uses_followup_system(secrets_file, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    with mock.patch.object(vt.requests, "post", return_value=_chat_resp()) as post:
+        vt.enhance_prompt("x", "followup")
+        assert post.call_args.kwargs["json"]["messages"][0]["content"] == vt.FOLLOWUP_SYSTEM
+
+
 def test_inject_force_paste_overrides_type(monkeypatch):
     monkeypatch.delenv("VOICE_TYPED_PASTE", raising=False)
     monkeypatch.setattr(vt, "active_window_class", lambda: "obsidian")
@@ -367,19 +381,34 @@ def test_inject_force_paste_overrides_type(monkeypatch):
 
 def test_handle_utterance_enhance_forces_paste(wav_file, monkeypatch):
     monkeypatch.setattr(vt, "transcribe", lambda p: "raw ramble")
-    monkeypatch.setattr(vt, "enhance_prompt", lambda t: "## Task\nclean prompt")
+    monkeypatch.setattr(vt, "enhance_prompt", lambda t, mode="task": "Task: clean prompt")
     calls = []
     monkeypatch.setattr(
         vt, "inject", lambda t, force_paste=False: calls.append((t, force_paste))
     )
-    vt.handle_utterance(wav_file, None, enhance=True)
-    assert calls == [("## Task\nclean prompt", True)]
-    assert vt.LAST_TEXT == "## Task\nclean prompt"
+    vt.handle_utterance(wav_file, None, enhance="task")
+    assert calls == [("Task: clean prompt", True)]
+    assert vt.LAST_TEXT == "Task: clean prompt"
+
+
+def test_handle_utterance_followup_passes_mode(wav_file, monkeypatch):
+    monkeypatch.setattr(vt, "transcribe", lambda p: "raw ramble")
+    seen = []
+    monkeypatch.setattr(
+        vt, "enhance_prompt", lambda t, mode="task": seen.append(mode) or "also do X"
+    )
+    calls = []
+    monkeypatch.setattr(
+        vt, "inject", lambda t, force_paste=False: calls.append((t, force_paste))
+    )
+    vt.handle_utterance(wav_file, None, enhance="followup")
+    assert seen == ["followup"]
+    assert calls == [("also do X", True)]
 
 
 def test_handle_utterance_enhance_failure_injects_raw(wav_file, monkeypatch):
     monkeypatch.setattr(vt, "transcribe", lambda p: "raw ramble")
-    def boom(t):
+    def boom(t, mode="task"):
         raise vt.EnhanceError("down")
     monkeypatch.setattr(vt, "enhance_prompt", boom)
     calls = []
@@ -388,7 +417,7 @@ def test_handle_utterance_enhance_failure_injects_raw(wav_file, monkeypatch):
     )
     notes = []
     monkeypatch.setattr(vt, "notify", notes.append)
-    vt.handle_utterance(wav_file, None, enhance=True)
+    vt.handle_utterance(wav_file, None, enhance="task")
     assert calls == [("raw ramble", True)]
     assert any("enhance failed" in n for n in notes)
 

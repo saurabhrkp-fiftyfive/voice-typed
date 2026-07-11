@@ -21,15 +21,27 @@ OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
 GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_ENHANCE_MODEL = "llama-3.3-70b-versatile"
 ENHANCE_SYSTEM = """\
-You rewrite raw dictated speech into a clear, well-structured prompt for an AI coding agent.
+You rewrite raw dictated speech into a clear prompt for an AI coding agent that is STARTING A NEW TASK.
 
 Rules:
 - Preserve the speaker's intent and every technical detail exactly: file names, commands, error messages, names, numbers.
 - Never add requirements, constraints, or facts the speaker did not say.
 - Remove filler words, false starts, and repetition.
-- Short simple request -> one tightened paragraph, no headings.
-- Long or multi-part request -> markdown sections: ## Task, ## Constraints, ## Expected output (omit empty sections).
+- Output the whole prompt on ONE physical line — no newline characters anywhere — so it pastes and displays correctly in the Claude Code input box.
+- Structure that single line with labelled differentiators: "Task: <...> | Constraints: <...> | Expected output: <...>", joined by " | ". Omit any label whose content is empty. A short simple request -> just "Task: <one tightened sentence>" with no other labels.
 - Output ONLY the rewritten prompt. No preamble, no commentary, no code fences around the output.
+"""
+FOLLOWUP_SYSTEM = """\
+You rewrite raw dictated speech into a concise FOLLOW-UP message for an AI coding agent ALREADY working in an active session. It is a continuation, not a new task spec.
+
+Rules:
+- Preserve the speaker's intent and every technical detail exactly: file names, commands, error messages, names, numbers.
+- Never add requirements, constraints, or facts the speaker did not say.
+- Remove filler words, false starts, and repetition.
+- Assume the agent already has full context — do NOT restate the task, re-explain background, or add headings or labels.
+- Output the whole message on ONE physical line — no newline characters anywhere — so it pastes and displays correctly in the Claude Code input box.
+- Keep it a direct instruction or correction (e.g. "Also handle X", "No, use Y instead", "Now run the tests"). Use " | " only to separate genuinely distinct points.
+- Output ONLY the rewritten message. No preamble, no commentary, no code fences around the output.
 """
 SECRETS_PATH = Path.home() / ".config" / "secrets.env"
 VOCAB_PATH = Path(__file__).resolve().parent / "vocab.txt"
@@ -37,7 +49,7 @@ VOCAB_MAX_CHARS = 800  # ~200 tokens; whisper prompt cap is 224 tokens
 CORRECTIONS_PATH = Path(__file__).resolve().parent / "corrections.txt"
 FLAGGED_PATH = Path(__file__).resolve().parent / "flagged.md"
 LAST_TEXT = ""  # last typed transcript, held in memory for ⚑ flagging only
-MAX_UTTERANCE_S = 60
+MAX_UTTERANCE_S = 300
 API_TIMEOUT_S = 30  # per-engine connect+read timeout, NOT total deadline
 
 
@@ -120,14 +132,14 @@ def transcribe(wav_path, timeout=API_TIMEOUT_S):
     raise TranscribeError(f"all engines failed: {last_err}")
 
 
-def _chat_request(url, key, model, text, timeout):
+def _chat_request(url, key, model, text, timeout, system=ENHANCE_SYSTEM):
     r = requests.post(
         url,
         headers={"Authorization": f"Bearer {key}"},
         json={
             "model": model,
             "messages": [
-                {"role": "system", "content": ENHANCE_SYSTEM},
+                {"role": "system", "content": system},
                 {"role": "user", "content": text},
             ],
             "temperature": 0.3,
@@ -138,11 +150,12 @@ def _chat_request(url, key, model, text, timeout):
     return r.json()["choices"][0]["message"]["content"].strip()
 
 
-def enhance_prompt(text, timeout=API_TIMEOUT_S):
+def enhance_prompt(text, mode="task", timeout=API_TIMEOUT_S):
     try:
         secrets = load_secrets()
     except OSError as e:
         raise EnhanceError(f"cannot read secrets: {e}") from e
+    system = FOLLOWUP_SYSTEM if mode == "followup" else ENHANCE_SYSTEM
     model = os.environ.get("VOICE_TYPED_ENHANCE_MODEL", "gpt-4o-mini")
     engines = [
         (OPENAI_CHAT_URL, secrets.get("OPENAI_API_KEY"), model),
@@ -156,7 +169,7 @@ def enhance_prompt(text, timeout=API_TIMEOUT_S):
     last_err = None
     for url, key, m in configured:
         try:
-            out = _chat_request(url, key, m, text, timeout)
+            out = _chat_request(url, key, m, text, timeout, system)
             if out:
                 return out
             last_err = EnhanceError("empty completion")
@@ -297,8 +310,9 @@ def stop_recording(proc):
         pass
 
 
-def handle_utterance(wav_path, window_id, enhance=False):
-    """Transcribe + inject one utterance. Never raises; deletes wav."""
+def handle_utterance(wav_path, window_id, enhance=""):
+    """Transcribe + inject one utterance. `enhance` is "" (plain), "task", or
+    "followup". Never raises; deletes wav."""
     try:
         try:
             text = transcribe(wav_path)
@@ -313,9 +327,9 @@ def handle_utterance(wav_path, window_id, enhance=False):
             flush=True,
         )
         if enhance:
-            notify("✨ enhancing")
+            notify("✨ enhancing (follow-up)" if enhance == "followup" else "✨ enhancing")
             try:
-                text = enhance_prompt(text)
+                text = enhance_prompt(text, enhance)
                 print(f"voice-typed: enhanced -> {text[:60]!r}", flush=True)
             except EnhanceError as e:
                 notify(f"enhance failed — raw text: {e}")
@@ -329,7 +343,7 @@ def handle_utterance(wav_path, window_id, enhance=False):
                 return
         try:
             # multi-line prompts must paste: xdotool type sends Return per newline
-            inject(text, force_paste=enhance)
+            inject(text, force_paste=bool(enhance))
         except Exception as e:  # noqa: BLE001 — daemon must survive
             notify(f"injection failed: {e}")
     finally:
@@ -398,6 +412,17 @@ def main():
     enhcode = getattr(ecodes, enhname, None)
     if enhcode is None:
         sys.exit(f"unknown VOICE_TYPED_ENHANCE_KEY: {enhname}")
+    folname = os.environ.get("VOICE_TYPED_FOLLOWUP_KEY", "KEY_F7")
+    folcode = getattr(ecodes, folname, None)
+    if folcode is None:
+        sys.exit(f"unknown VOICE_TYPED_FOLLOWUP_KEY: {folname}")
+
+    def mode_for(code):
+        if code == enhcode:
+            return "task"
+        if code == folcode:
+            return "followup"
+        return ""
     devs, denied = find_keyboards(keycode)
     if not devs:
         sys.exit(
@@ -409,15 +434,17 @@ def main():
     threading.Thread(target=stt_worker, args=(q,), daemon=True).start()
     if os.environ.get("VOICE_TYPED_GRAB", "1") != "0":
         threading.Thread(target=x11_grab_key, args=(enhname,), daemon=True).start()
+        threading.Thread(target=x11_grab_key, args=(folname,), daemon=True).start()
 
     rec = None            # active pw-record Popen or None
     wav = None            # Path of in-flight recording
-    deadline = 0.0        # monotonic cutoff for 60s cap
+    deadline = 0.0        # monotonic cutoff for MAX_UTTERANCE_S cap
     awaiting_release = False  # cap fired while key held; swallow next keyup
     rec_key = None        # keycode that started the in-flight recording
 
     print(
-        f"voice-typed: {len(devs)} device(s), key={keyname}, enhance={enhname}",
+        f"voice-typed: {len(devs)} device(s), key={keyname}, "
+        f"enhance={enhname}, followup={folname}",
         flush=True,
     )
     while True:
@@ -431,12 +458,12 @@ def main():
             if rec.poll() is not None:  # recorder died mid-recording
                 notify(f"recorder died (exit {rec.returncode})")
                 rec = None
-            elif time.monotonic() >= deadline:  # 60s cap
+            elif time.monotonic() >= deadline:  # MAX_UTTERANCE_S cap
                 stop_recording(rec)
                 rec = None
                 awaiting_release = True
-                notify("60s cap — transcribing")
-                q.put((wav, active_window(), rec_key == enhcode))
+                notify(f"{MAX_UTTERANCE_S}s cap — transcribing")
+                q.put((wav, active_window(), mode_for(rec_key)))
 
         for d in r:
             try:
@@ -450,7 +477,7 @@ def main():
                 continue
             for ev in events:
                 if ev.type != ecodes.EV_KEY or ev.code not in (
-                    keycode, flagcode, enhcode,
+                    keycode, flagcode, enhcode, folcode,
                 ):
                     continue
                 if ev.code == flagcode:
@@ -468,13 +495,13 @@ def main():
                     rec_key = ev.code
                     deadline = time.monotonic() + MAX_UTTERANCE_S
                     print(
-                        f"voice-typed: keydown code={ev.code} enhance={ev.code == enhcode}",
+                        f"voice-typed: keydown code={ev.code} mode={mode_for(ev.code)!r}",
                         flush=True,
                     )
-                    notify(
-                        "🎙 recording (enhance)" if ev.code == enhcode
-                        else "🎙 recording"
-                    )
+                    notify({
+                        "task": "🎙 recording (enhance)",
+                        "followup": "🎙 recording (follow-up)",
+                    }.get(mode_for(ev.code), "🎙 recording"))
                 elif ev.value == 0 and ev.code == rec_key:
                     # keyup (value 2 autorepeat ignored); other key's keyup ignored
                     if awaiting_release:
@@ -484,7 +511,7 @@ def main():
                         stop_recording(rec)
                         rec = None
                         notify("… transcribing")
-                        q.put((wav, active_window(), rec_key == enhcode))
+                        q.put((wav, active_window(), mode_for(rec_key)))
                         rec_key = None
 
 
