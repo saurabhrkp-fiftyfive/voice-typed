@@ -173,12 +173,17 @@ TERMINAL_CLASS_HINTS = (
 
 
 def active_window_class():
+    # xprop, not `xdotool getwindowclassname` — installed xdotool predates that command
     try:
+        wid = subprocess.run(
+            ["xdotool", "getactivewindow"],
+            capture_output=True, check=True, timeout=5,
+        ).stdout.strip().decode()
         out = subprocess.run(
-            ["xdotool", "getactivewindow", "getwindowclassname"],
+            ["xprop", "-id", wid, "WM_CLASS"],
             capture_output=True, check=True, timeout=5,
         )
-        return out.stdout.strip().decode().lower()
+        return out.stdout.decode().lower()
     except Exception:  # noqa: BLE001 — guard is best-effort
         return ""
 

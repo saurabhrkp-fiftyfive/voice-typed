@@ -125,6 +125,15 @@ def test_inject_paste_mode(monkeypatch):
         assert cmds[1][-1] == "ctrl+v"
 
 
+def test_active_window_class_parses_xprop():
+    wid = mock.Mock(stdout=b"12345678\n")
+    xprop = mock.Mock(stdout=b'WM_CLASS(STRING) = "gnome-terminal-server", "Gnome-terminal"\n')
+    with mock.patch.object(vt.subprocess, "run", side_effect=[wid, xprop]) as run:
+        cls = vt.active_window_class()
+        assert "gnome-terminal-server" in cls
+        assert run.call_args_list[1].args[0][:2] == ["xprop", "-id"]
+
+
 def test_paste_chord_terminal_uses_shift(monkeypatch):
     for cls in ("gnome-terminal-server", "kitty", "org.wezfurlong.wezterm"):
         monkeypatch.setattr(vt, "active_window_class", lambda c=cls: c)
