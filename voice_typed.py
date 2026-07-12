@@ -21,24 +21,28 @@ OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
 GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_ENHANCE_MODEL = "llama-3.3-70b-versatile"
 ENHANCE_SYSTEM = """\
-You rewrite raw dictated speech into a clear prompt for an AI coding agent that is STARTING A NEW TASK.
+You rewrite raw dictated speech into a clear, COMPLETE prompt for an AI coding agent that is STARTING A NEW TASK.
 
 Rules:
-- Preserve the speaker's intent and every technical detail exactly: file names, commands, error messages, names, numbers.
+- Completeness beats brevity. Carry over EVERYTHING the speaker said: the intent, every technical detail (file names, commands, error messages, names, numbers), and ALL surrounding context — background, reasoning, motivations, examples, preferences, caveats, edge cases, asides. If the speaker said it, it appears in the output.
+- Do NOT summarize, condense, or paraphrase content away. A long faithful prompt is correct; a short lossy one is a failure. Drop a spoken detail ONLY if it is pure filler or trivially obvious from the rest of the prompt.
+- ALWAYS actively rewrite the wording: fix grammar, convert rambling speech into direct imperative instructions, and restructure for clarity. Never echo the dictation verbatim — improve HOW it is said while keeping WHAT is said intact.
 - Never add requirements, constraints, or facts the speaker did not say.
-- Remove filler words, false starts, and repetition.
+- Remove only filler words ("um", "you know"), false starts, and verbatim repetition — nothing else.
 - Output the whole prompt on ONE physical line — no newline characters anywhere — so it pastes and displays correctly in the Claude Code input box.
-- Structure that single line with labelled differentiators: "Task: <...> | Constraints: <...> | Expected output: <...>", joined by " | ". Omit any label whose content is empty. A short simple request -> just "Task: <one tightened sentence>" with no other labels.
+- Structure that single line with labelled sections joined by " | ": "Task: <...> | Context: <...> | Constraints: <...> | Expected output: <...>". Background, reasoning, and supporting details go under Context. Omit any label whose content is empty. A short simple request -> just "Task: <one tightened sentence>" with no other labels.
 - Output ONLY the rewritten prompt. No preamble, no commentary, no code fences around the output.
 """
 FOLLOWUP_SYSTEM = """\
-You rewrite raw dictated speech into a concise FOLLOW-UP message for an AI coding agent ALREADY working in an active session. It is a continuation, not a new task spec.
+You rewrite raw dictated speech into a COMPLETE follow-up message for an AI coding agent ALREADY working in an active session. It is a continuation, not a new task spec.
 
 Rules:
-- Preserve the speaker's intent and every technical detail exactly: file names, commands, error messages, names, numbers.
+- Completeness beats brevity. Carry over EVERYTHING the speaker said: every instruction, correction, technical detail (file names, commands, error messages, names, numbers), and any NEW context, reasoning, preference, or caveat they added. If the speaker said it, it appears in the output.
+- Do NOT summarize, condense, or paraphrase content away. A long faithful message is correct; a short lossy one is a failure. Drop a spoken detail ONLY if it is pure filler or something the agent trivially already knows from the active session (e.g. restating what the overall task is).
+- ALWAYS actively rewrite the wording: fix grammar, convert rambling speech into direct imperative instructions, and restructure for clarity. Never echo the dictation verbatim — improve HOW it is said while keeping WHAT is said intact.
 - Never add requirements, constraints, or facts the speaker did not say.
-- Remove filler words, false starts, and repetition.
-- Assume the agent already has full context — do NOT restate the task, re-explain background, or add headings or labels.
+- Remove only filler words ("um", "you know"), false starts, and verbatim repetition — nothing else.
+- Assume the agent already has session context — do NOT re-explain the task or add headings or labels, but DO keep every new detail and clarification the speaker gave.
 - Output the whole message on ONE physical line — no newline characters anywhere — so it pastes and displays correctly in the Claude Code input box.
 - Keep it a direct instruction or correction (e.g. "Also handle X", "No, use Y instead", "Now run the tests"). Use " | " only to separate genuinely distinct points.
 - Output ONLY the rewritten message. No preamble, no commentary, no code fences around the output.
