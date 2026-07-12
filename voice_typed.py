@@ -400,6 +400,20 @@ def find_keyboards(keycode):
     return devs, denied
 
 
+def rescan_devices(devs, keycode):
+    """Add hotplugged keyboards (BT reconnect, dongle re-plug) to devs in place."""
+    known = {d.path for d in devs}
+    added = 0
+    for d in find_keyboards(keycode)[0]:
+        if d.path in known:
+            d.close()
+        else:
+            devs.append(d)
+            added += 1
+            print(f"voice-typed: device added {d.path} ({d.name})", flush=True)
+    return added
+
+
 def main():
     import select
     from evdev import ecodes
@@ -445,6 +459,7 @@ def main():
     deadline = 0.0        # monotonic cutoff for MAX_UTTERANCE_S cap
     awaiting_release = False  # cap fired while key held; swallow next keyup
     rec_key = None        # keycode that started the in-flight recording
+    input_mtime = os.stat("/dev/input").st_mtime  # changes on device add/remove
 
     print(
         f"voice-typed: {len(devs)} device(s), key={keyname}, "
@@ -457,6 +472,14 @@ def main():
         else:
             timeout = max(0.05, min(1.0, deadline - time.monotonic()))
         r, _, _ = select.select(devs, [], [], timeout)
+
+        try:
+            m = os.stat("/dev/input").st_mtime
+        except OSError:
+            m = input_mtime
+        if m != input_mtime:
+            input_mtime = m
+            rescan_devices(devs, keycode)
 
         if rec is not None:
             if rec.poll() is not None:  # recorder died mid-recording

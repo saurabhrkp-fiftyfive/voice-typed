@@ -433,3 +433,26 @@ def test_handle_utterance_plain_never_enhances(wav_file, monkeypatch):
     )
     vt.handle_utterance(wav_file, None)
     assert calls == [("plain", False)]
+
+
+def test_rescan_devices_adds_new_closes_dupes(monkeypatch):
+    old = mock.Mock(path="/dev/input/event3")
+    dupe = mock.Mock(path="/dev/input/event3")
+    fresh = mock.Mock(path="/dev/input/event6")
+    monkeypatch.setattr(vt, "find_keyboards", lambda kc: ([dupe, fresh], 0))
+    devs = [old]
+    added = vt.rescan_devices(devs, 67)
+    assert added == 1
+    assert devs == [old, fresh]
+    dupe.close.assert_called_once()
+    fresh.close.assert_not_called()
+
+
+def test_rescan_devices_no_new(monkeypatch):
+    old = mock.Mock(path="/dev/input/event3")
+    dupe = mock.Mock(path="/dev/input/event3")
+    monkeypatch.setattr(vt, "find_keyboards", lambda kc: ([dupe], 0))
+    devs = [old]
+    assert vt.rescan_devices(devs, 67) == 0
+    assert devs == [old]
+    dupe.close.assert_called_once()
