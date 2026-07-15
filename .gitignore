@@ -1,2 +1,5 @@
 __pycache__/
 *.pyc
+
+# runtime flag log (contains dictated utterances)
+flagged.md

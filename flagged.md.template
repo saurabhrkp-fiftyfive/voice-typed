@@ -1,0 +1,7 @@
+# voice-typed — flagged utterances
+
+Press **F10** right after a bad transcription → last typed text lands here.
+Fill the correction after the `→`, then move the pair into `corrections.txt`
+(format: `wrong => right`) or ask the agent to do it.
+
+- YYYY-MM-DD HH:MM ⚑ "example bad transcript" → example correction
