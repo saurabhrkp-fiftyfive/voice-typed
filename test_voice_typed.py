@@ -381,7 +381,7 @@ def test_inject_force_paste_overrides_type(monkeypatch):
 
 def test_handle_utterance_enhance_forces_paste(wav_file, monkeypatch):
     monkeypatch.setattr(vt, "transcribe", lambda p: "raw ramble")
-    monkeypatch.setattr(vt, "enhance_prompt", lambda t, mode="task": "Task: clean prompt")
+    monkeypatch.setattr(vt, "enhance_prompt", lambda t, mode="task", image_path=None: "Task: clean prompt")
     calls = []
     monkeypatch.setattr(
         vt, "inject", lambda t, force_paste=False: calls.append((t, force_paste))
@@ -395,7 +395,7 @@ def test_handle_utterance_followup_passes_mode(wav_file, monkeypatch):
     monkeypatch.setattr(vt, "transcribe", lambda p: "raw ramble")
     seen = []
     monkeypatch.setattr(
-        vt, "enhance_prompt", lambda t, mode="task": seen.append(mode) or "also do X"
+        vt, "enhance_prompt", lambda t, mode="task", image_path=None: seen.append(mode) or "also do X"
     )
     calls = []
     monkeypatch.setattr(
@@ -408,7 +408,7 @@ def test_handle_utterance_followup_passes_mode(wav_file, monkeypatch):
 
 def test_handle_utterance_enhance_failure_injects_raw(wav_file, monkeypatch):
     monkeypatch.setattr(vt, "transcribe", lambda p: "raw ramble")
-    def boom(t, mode="task"):
+    def boom(t, mode="task", image_path=None):
         raise vt.EnhanceError("down")
     monkeypatch.setattr(vt, "enhance_prompt", boom)
     calls = []
@@ -584,3 +584,31 @@ def test_downscale_shrinks_large_image(tmp_path):
     vt._downscale(p)
     with Image.open(p) as im:
         assert max(im.size) <= vt.SHOT_MAX_PX
+
+
+def test_handle_utterance_passes_shot_to_enhance_and_unlinks(wav_file, tmp_path, monkeypatch):
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(b"\x89PNG\r\n")
+    monkeypatch.setattr(vt, "transcribe", lambda p: "raw")
+    seen = {}
+    monkeypatch.setattr(
+        vt, "enhance_prompt",
+        lambda t, mode="task", image_path=None: seen.update(img=image_path) or "clean",
+    )
+    monkeypatch.setattr(vt, "inject", lambda t, force_paste=False: None)
+    vt.handle_utterance(wav_file, None, enhance="message", shot_path=shot)
+    assert seen["img"] == shot
+    assert not shot.exists()      # screenshot deleted
+    assert not wav_file.exists()  # wav deleted
+
+
+def test_handle_utterance_unlinks_shot_even_on_failure(wav_file, tmp_path, monkeypatch):
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(b"\x89PNG\r\n")
+    def boom(p):
+        raise vt.TranscribeError("down")
+    monkeypatch.setattr(vt, "transcribe", boom)
+    monkeypatch.setattr(vt, "notify", lambda m: None)
+    vt.handle_utterance(wav_file, None, enhance="message", shot_path=shot)
+    assert not shot.exists()
+    assert not wav_file.exists()

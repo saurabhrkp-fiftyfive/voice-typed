@@ -408,9 +408,10 @@ def mode_for_code(code, enhcode, folcode, msgcode):
     return ""
 
 
-def handle_utterance(wav_path, window_id, enhance=""):
-    """Transcribe + inject one utterance. `enhance` is "" (plain), "task", or
-    "followup". Never raises; deletes wav."""
+def handle_utterance(wav_path, window_id, enhance="", shot_path=None):
+    """Transcribe + inject one utterance. `enhance` is "" (plain), "task",
+    "followup", or "message". `shot_path` is an optional screenshot PNG for
+    vision-grounded enhance. Never raises; deletes wav + shot."""
     try:
         try:
             text = transcribe(wav_path)
@@ -427,7 +428,7 @@ def handle_utterance(wav_path, window_id, enhance=""):
         if enhance:
             notify("✨ enhancing (follow-up)" if enhance == "followup" else "✨ enhancing")
             try:
-                text = enhance_prompt(text, enhance)
+                text = enhance_prompt(text, enhance, image_path=shot_path)
                 print(f"voice-typed: enhanced -> {text[:60]!r}", flush=True)
             except EnhanceError as e:
                 notify(f"enhance failed — raw text: {e}")
@@ -446,12 +447,14 @@ def handle_utterance(wav_path, window_id, enhance=""):
             notify(f"injection failed: {e}")
     finally:
         Path(wav_path).unlink(missing_ok=True)
+        if shot_path:
+            Path(shot_path).unlink(missing_ok=True)
 
 
 def stt_worker(q):
     while True:
-        wav_path, window_id, enhance = q.get()
-        handle_utterance(wav_path, window_id, enhance)
+        wav_path, window_id, enhance, shot_path = q.get()
+        handle_utterance(wav_path, window_id, enhance, shot_path)
         q.task_done()
 
 
@@ -528,13 +531,13 @@ def main():
     folcode = getattr(ecodes, folname, None)
     if folcode is None:
         sys.exit(f"unknown VOICE_TYPED_FOLLOWUP_KEY: {folname}")
+    msgname = os.environ.get("VOICE_TYPED_MSG_KEY", "KEY_F6")
+    msgcode = getattr(ecodes, msgname, None)
+    if msgcode is None:
+        sys.exit(f"unknown VOICE_TYPED_MSG_KEY: {msgname}")
 
     def mode_for(code):
-        if code == enhcode:
-            return "task"
-        if code == folcode:
-            return "followup"
-        return ""
+        return mode_for_code(code, enhcode, folcode, msgcode)
     devs, denied = find_keyboards(keycode)
     if not devs:
         sys.exit(
@@ -547,9 +550,11 @@ def main():
     if os.environ.get("VOICE_TYPED_GRAB", "1") != "0":
         threading.Thread(target=x11_grab_key, args=(enhname,), daemon=True).start()
         threading.Thread(target=x11_grab_key, args=(folname,), daemon=True).start()
+        threading.Thread(target=x11_grab_key, args=(msgname,), daemon=True).start()
 
     rec = None            # active pw-record Popen or None
     wav = None            # Path of in-flight recording
+    shot = None           # Path of in-flight screenshot (screenshot-modes only) or None
     deadline = 0.0        # monotonic cutoff for MAX_UTTERANCE_S cap
     awaiting_release = False  # cap fired while key held; swallow next keyup
     rec_key = None        # keycode that started the in-flight recording
@@ -557,7 +562,7 @@ def main():
 
     print(
         f"voice-typed: {len(devs)} device(s), key={keyname}, "
-        f"enhance={enhname}, followup={folname}",
+        f"enhance={enhname}, followup={folname}, message={msgname}",
         flush=True,
     )
     while True:
@@ -584,7 +589,7 @@ def main():
                 rec = None
                 awaiting_release = True
                 notify(f"{MAX_UTTERANCE_S}s cap — transcribing")
-                q.put((wav, active_window(), mode_for(rec_key)))
+                q.put((wav, active_window(), mode_for(rec_key), shot))
 
         for d in r:
             try:
@@ -598,7 +603,7 @@ def main():
                 continue
             for ev in events:
                 if ev.type != ecodes.EV_KEY or ev.code not in (
-                    keycode, flagcode, enhcode, folcode,
+                    keycode, flagcode, enhcode, folcode, msgcode,
                 ):
                     continue
                 if ev.code == flagcode:
@@ -614,6 +619,11 @@ def main():
                         rec = None
                         continue
                     rec_key = ev.code
+                    shot = None
+                    if mode_for(ev.code) in SCREENSHOT_MODES:
+                        shot = capture_active_window(
+                            run_dir / f"shot-{int(time.time() * 1000)}.png"
+                        )
                     deadline = time.monotonic() + MAX_UTTERANCE_S
                     print(
                         f"voice-typed: keydown code={ev.code} mode={mode_for(ev.code)!r}",
@@ -622,6 +632,7 @@ def main():
                     notify({
                         "task": "🎙 recording (enhance)",
                         "followup": "🎙 recording (follow-up)",
+                        "message": "🎙 recording (message)",
                     }.get(mode_for(ev.code), "🎙 recording"))
                 elif ev.value == 0 and ev.code == rec_key:
                     # keyup (value 2 autorepeat ignored); other key's keyup ignored
@@ -632,7 +643,7 @@ def main():
                         stop_recording(rec)
                         rec = None
                         notify("… transcribing")
-                        q.put((wav, active_window(), mode_for(rec_key)))
+                        q.put((wav, active_window(), mode_for(rec_key), shot))
                         rec_key = None
 
 
