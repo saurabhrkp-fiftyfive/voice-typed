@@ -55,6 +55,7 @@ FLAGGED_PATH = Path(__file__).resolve().parent / "flagged.md"
 LAST_TEXT = ""  # last typed transcript, held in memory for ⚑ flagging only
 MAX_UTTERANCE_S = 300
 API_TIMEOUT_S = 30  # per-engine connect+read timeout, NOT total deadline
+SCREENSHOT_MODES = {"followup", "message"}
 
 
 class TranscribeError(Exception):
@@ -312,6 +313,16 @@ def stop_recording(proc):
             proc.wait()
     except OSError:
         pass
+
+
+def mode_for_code(code, enhcode, folcode, msgcode):
+    if code == msgcode:
+        return "message"
+    if code == enhcode:
+        return "task"
+    if code == folcode:
+        return "followup"
+    return ""
 
 
 def handle_utterance(wav_path, window_id, enhance=""):

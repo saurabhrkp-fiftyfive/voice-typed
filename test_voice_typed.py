@@ -456,3 +456,18 @@ def test_rescan_devices_no_new(monkeypatch):
     assert vt.rescan_devices(devs, 67) == 0
     assert devs == [old]
     dupe.close.assert_called_once()
+
+
+def test_mode_for_code_maps_each_key():
+    ENH, FOL, MSG = 65, 63, 61
+    assert vt.mode_for_code(MSG, ENH, FOL, MSG) == "message"
+    assert vt.mode_for_code(ENH, ENH, FOL, MSG) == "task"
+    assert vt.mode_for_code(FOL, ENH, FOL, MSG) == "followup"
+    assert vt.mode_for_code(999, ENH, FOL, MSG) == ""  # plain / unknown
+
+
+def test_screenshot_modes_gate():
+    assert "followup" in vt.SCREENSHOT_MODES
+    assert "message" in vt.SCREENSHOT_MODES
+    assert "task" not in vt.SCREENSHOT_MODES
+    assert "" not in vt.SCREENSHOT_MODES
