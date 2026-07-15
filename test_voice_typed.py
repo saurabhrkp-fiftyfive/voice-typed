@@ -381,7 +381,7 @@ def test_inject_force_paste_overrides_type(monkeypatch):
 
 def test_handle_utterance_enhance_forces_paste(wav_file, monkeypatch):
     monkeypatch.setattr(vt, "transcribe", lambda p: "raw ramble")
-    monkeypatch.setattr(vt, "enhance_prompt", lambda t, mode="task": "Task: clean prompt")
+    monkeypatch.setattr(vt, "enhance_prompt", lambda t, mode="task", image_path=None: "Task: clean prompt")
     calls = []
     monkeypatch.setattr(
         vt, "inject", lambda t, force_paste=False: calls.append((t, force_paste))
@@ -395,7 +395,7 @@ def test_handle_utterance_followup_passes_mode(wav_file, monkeypatch):
     monkeypatch.setattr(vt, "transcribe", lambda p: "raw ramble")
     seen = []
     monkeypatch.setattr(
-        vt, "enhance_prompt", lambda t, mode="task": seen.append(mode) or "also do X"
+        vt, "enhance_prompt", lambda t, mode="task", image_path=None: seen.append(mode) or "also do X"
     )
     calls = []
     monkeypatch.setattr(
@@ -408,7 +408,7 @@ def test_handle_utterance_followup_passes_mode(wav_file, monkeypatch):
 
 def test_handle_utterance_enhance_failure_injects_raw(wav_file, monkeypatch):
     monkeypatch.setattr(vt, "transcribe", lambda p: "raw ramble")
-    def boom(t, mode="task"):
+    def boom(t, mode="task", image_path=None):
         raise vt.EnhanceError("down")
     monkeypatch.setattr(vt, "enhance_prompt", boom)
     calls = []
@@ -456,3 +456,159 @@ def test_rescan_devices_no_new(monkeypatch):
     assert vt.rescan_devices(devs, 67) == 0
     assert devs == [old]
     dupe.close.assert_called_once()
+
+
+def test_mode_for_code_maps_each_key():
+    ENH, FOL, MSG = 65, 63, 61
+    assert vt.mode_for_code(MSG, ENH, FOL, MSG) == "message"
+    assert vt.mode_for_code(ENH, ENH, FOL, MSG) == "task"
+    assert vt.mode_for_code(FOL, ENH, FOL, MSG) == "followup"
+    assert vt.mode_for_code(999, ENH, FOL, MSG) == ""  # plain / unknown
+
+
+def test_screenshot_modes_gate():
+    assert "followup" in vt.SCREENSHOT_MODES
+    assert "message" in vt.SCREENSHOT_MODES
+    assert "task" not in vt.SCREENSHOT_MODES
+    assert "" not in vt.SCREENSHOT_MODES
+
+
+def _png_bytes():
+    # 1x1 white PNG
+    from PIL import Image
+    import io
+    buf = io.BytesIO()
+    Image.new("RGB", (1, 1), "white").save(buf, "PNG")
+    return buf.getvalue()
+
+
+def test_encode_image_roundtrip(tmp_path):
+    import base64
+    p = tmp_path / "s.png"
+    raw = _png_bytes()
+    p.write_bytes(raw)
+    assert base64.b64decode(vt._encode_image(p)) == raw
+
+
+def test_enhance_prompt_message_uses_msg_system(secrets_file, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    with mock.patch.object(vt.requests, "post", return_value=_chat_resp()) as post:
+        vt.enhance_prompt("say hi", "message")
+        assert post.call_args.kwargs["json"]["messages"][0]["content"] == vt.MSG_SYSTEM
+
+
+def test_enhance_prompt_with_image_sends_vision_array_to_openai(secrets_file, tmp_path, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    p = tmp_path / "s.png"
+    p.write_bytes(_png_bytes())
+    with mock.patch.object(vt.requests, "post", return_value=_chat_resp()) as post:
+        vt.enhance_prompt("describe", "message", image_path=p)
+        content = post.call_args_list[0].kwargs["json"]["messages"][1]["content"]
+        assert isinstance(content, list)
+        assert content[0] == {"type": "text", "text": "describe"}
+        assert content[1]["type"] == "image_url"
+        assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_enhance_prompt_groq_fallback_drops_image(secrets_file, tmp_path, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    p = tmp_path / "s.png"
+    p.write_bytes(_png_bytes())
+    with mock.patch.object(
+        vt.requests, "post",
+        side_effect=[_chat_resp(500), _chat_resp(content="via groq")],
+    ) as post:
+        assert vt.enhance_prompt("x", "followup", image_path=p) == "via groq"
+        # OpenAI (first) got the vision array; Groq (second) got a plain string
+        assert isinstance(post.call_args_list[0].kwargs["json"]["messages"][1]["content"], list)
+        assert post.call_args_list[1].kwargs["json"]["messages"][1]["content"] == "x"
+
+
+def test_enhance_prompt_followup_image_prepends_grounding(secrets_file, tmp_path, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    p = tmp_path / "s.png"
+    p.write_bytes(_png_bytes())
+    with mock.patch.object(vt.requests, "post", return_value=_chat_resp()) as post:
+        vt.enhance_prompt("x", "followup", image_path=p)
+        system = post.call_args_list[0].kwargs["json"]["messages"][0]["content"]
+        assert system.startswith(vt.GROUNDING_LINE)
+        assert vt.FOLLOWUP_SYSTEM in system
+
+
+def test_enhance_prompt_no_image_stays_plain_string(secrets_file, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    with mock.patch.object(vt.requests, "post", return_value=_chat_resp()) as post:
+        vt.enhance_prompt("fix bug")
+        assert post.call_args.kwargs["json"]["messages"][1]["content"] == "fix bug"
+
+
+_GEO = b"WINDOW=12345\nX=100\nY=50\nWIDTH=800\nHEIGHT=600\nSCREEN=0\n"
+
+
+def test_capture_active_window_builds_region_and_returns_path(tmp_path, monkeypatch):
+    png = tmp_path / "shot.png"
+    wid = mock.Mock(stdout=b"12345\n")
+    geo = mock.Mock(stdout=_GEO)
+    ff = mock.Mock(stdout=b"")
+    monkeypatch.setattr(vt, "_downscale", lambda p: None)  # skip real PIL
+    with mock.patch.object(vt.subprocess, "run", side_effect=[wid, geo, ff]) as run:
+        out = vt.capture_active_window(png)
+        assert out == png
+        ffmpeg_cmd = run.call_args_list[2].args[0]
+        assert ffmpeg_cmd[0] == "ffmpeg"
+        assert "800x600" in ffmpeg_cmd
+        assert any(a.endswith("+100,50") for a in ffmpeg_cmd)  # DISPLAY+X,Y offset
+
+
+def test_capture_active_window_ffmpeg_failure_returns_none(tmp_path, monkeypatch):
+    png = tmp_path / "shot.png"
+    wid = mock.Mock(stdout=b"12345\n")
+    geo = mock.Mock(stdout=_GEO)
+    err = vt.subprocess.CalledProcessError(1, "ffmpeg")
+    monkeypatch.setattr(vt, "_downscale", lambda p: None)
+    with mock.patch.object(vt.subprocess, "run", side_effect=[wid, geo, err]):
+        assert vt.capture_active_window(png) is None
+
+
+def test_capture_active_window_xdotool_failure_returns_none(tmp_path, monkeypatch):
+    png = tmp_path / "shot.png"
+    err = vt.subprocess.CalledProcessError(1, "xdotool")
+    with mock.patch.object(vt.subprocess, "run", side_effect=[err]):
+        assert vt.capture_active_window(png) is None
+
+
+def test_downscale_shrinks_large_image(tmp_path):
+    from PIL import Image
+    p = tmp_path / "big.png"
+    Image.new("RGB", (4000, 3000), "white").save(p)
+    vt._downscale(p)
+    with Image.open(p) as im:
+        assert max(im.size) <= vt.SHOT_MAX_PX
+
+
+def test_handle_utterance_passes_shot_to_enhance_and_unlinks(wav_file, tmp_path, monkeypatch):
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(b"\x89PNG\r\n")
+    monkeypatch.setattr(vt, "transcribe", lambda p: "raw")
+    seen = {}
+    monkeypatch.setattr(
+        vt, "enhance_prompt",
+        lambda t, mode="task", image_path=None: seen.update(img=image_path) or "clean",
+    )
+    monkeypatch.setattr(vt, "inject", lambda t, force_paste=False: None)
+    vt.handle_utterance(wav_file, None, enhance="message", shot_path=shot)
+    assert seen["img"] == shot
+    assert not shot.exists()      # screenshot deleted
+    assert not wav_file.exists()  # wav deleted
+
+
+def test_handle_utterance_unlinks_shot_even_on_failure(wav_file, tmp_path, monkeypatch):
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(b"\x89PNG\r\n")
+    def boom(p):
+        raise vt.TranscribeError("down")
+    monkeypatch.setattr(vt, "transcribe", boom)
+    monkeypatch.setattr(vt, "notify", lambda m: None)
+    vt.handle_utterance(wav_file, None, enhance="message", shot_path=shot)
+    assert not shot.exists()
+    assert not wav_file.exists()

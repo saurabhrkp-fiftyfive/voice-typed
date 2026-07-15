@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """voice-typed — hold-to-talk dictation daemon (X11/GNOME).
 
-Hold VOICE_TYPED_KEY (default F9), speak, release -> text typed into
-focused window via xdotool. STT: OpenAI gpt-4o-transcribe, Groq fallback.
+Hold a key, speak, release -> text typed into the focused window via xdotool.
+Keys: F9 verbatim | F8 new-task enhance | F7 follow-up enhance (+screenshot) |
+F6 chat message (+screenshot) | F10 flag last. Screenshot modes grab the active
+window and send it to a vision model for on-screen grounding.
+STT: OpenAI gpt-4o-transcribe, Groq fallback. Enhance: gpt-4o-mini (vision).
 """
+import base64
 import os
 import queue
 import re
@@ -47,6 +51,22 @@ Rules:
 - Keep it a direct instruction or correction (e.g. "Also handle X", "No, use Y instead", "Now run the tests"). Use " | " only to separate genuinely distinct points.
 - Output ONLY the rewritten message. No preamble, no commentary, no code fences around the output.
 """
+MSG_SYSTEM = """\
+You rewrite raw dictated speech into a message the speaker wants to send, using an attached screenshot of their current screen as grounding context.
+
+Rules:
+- The dictation is the SOURCE OF TRUTH for what to say. The screenshot only grounds references — who "him/her/they" is, the ongoing topic, names, the question being answered, quoted text. NEVER add content, claims, or details the speaker did not intend just because they appear on screen.
+- Completeness beats brevity: carry over everything the speaker said. Fix grammar, remove filler ("um", "you know") and false starts, and turn rambling speech into a clear, direct message. Never add requirements or facts the speaker did not say.
+- Write in a natural human messaging tone (chat/DM) — not a formal report, not a coding-agent prompt — unless the speaker explicitly asked for another tone.
+- Output the whole message on ONE physical line — no newline characters anywhere.
+- Output ONLY the message. No preamble, no commentary, no code fences.
+"""
+GROUNDING_LINE = (
+    "A screenshot of the current screen is attached for context. Use it ONLY to "
+    "ground references in the dictation — visible output, error messages, filenames, "
+    "names, the topic, who is being replied to. Never add facts from the screenshot "
+    "that the speaker did not reference."
+)
 SECRETS_PATH = Path.home() / ".config" / "secrets.env"
 VOCAB_PATH = Path(__file__).resolve().parent / "vocab.txt"
 VOCAB_MAX_CHARS = 800  # ~200 tokens; whisper prompt cap is 224 tokens
@@ -55,6 +75,8 @@ FLAGGED_PATH = Path(__file__).resolve().parent / "flagged.md"
 LAST_TEXT = ""  # last typed transcript, held in memory for ⚑ flagging only
 MAX_UTTERANCE_S = 300
 API_TIMEOUT_S = 30  # per-engine connect+read timeout, NOT total deadline
+SCREENSHOT_MODES = {"followup", "message"}
+SHOT_MAX_PX = 1024  # longest side sent to the vision model
 
 
 class TranscribeError(Exception):
@@ -136,7 +158,19 @@ def transcribe(wav_path, timeout=API_TIMEOUT_S):
     raise TranscribeError(f"all engines failed: {last_err}")
 
 
-def _chat_request(url, key, model, text, timeout, system=ENHANCE_SYSTEM):
+def _encode_image(path):
+    return base64.b64encode(Path(path).read_bytes()).decode()
+
+
+def _chat_request(url, key, model, text, timeout, system=ENHANCE_SYSTEM, image_b64=None):
+    if image_b64:
+        user_content = [
+            {"type": "text", "text": text},
+            {"type": "image_url",
+             "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
+        ]
+    else:
+        user_content = text
     r = requests.post(
         url,
         headers={"Authorization": f"Bearer {key}"},
@@ -144,7 +178,7 @@ def _chat_request(url, key, model, text, timeout, system=ENHANCE_SYSTEM):
             "model": model,
             "messages": [
                 {"role": "system", "content": system},
-                {"role": "user", "content": text},
+                {"role": "user", "content": user_content},
             ],
             "temperature": 0.3,
         },
@@ -154,12 +188,20 @@ def _chat_request(url, key, model, text, timeout, system=ENHANCE_SYSTEM):
     return r.json()["choices"][0]["message"]["content"].strip()
 
 
-def enhance_prompt(text, mode="task", timeout=API_TIMEOUT_S):
+def enhance_prompt(text, mode="task", timeout=API_TIMEOUT_S, image_path=None):
     try:
         secrets = load_secrets()
     except OSError as e:
         raise EnhanceError(f"cannot read secrets: {e}") from e
-    system = FOLLOWUP_SYSTEM if mode == "followup" else ENHANCE_SYSTEM
+    system = {"message": MSG_SYSTEM, "followup": FOLLOWUP_SYSTEM}.get(mode, ENHANCE_SYSTEM)
+    image_b64 = None
+    if image_path:
+        try:
+            image_b64 = _encode_image(image_path)
+        except OSError as e:
+            print(f"voice-typed: image encode failed: {e}", flush=True)
+    if image_b64 and mode != "message":
+        system = GROUNDING_LINE + "\n\n" + system
     model = os.environ.get("VOICE_TYPED_ENHANCE_MODEL", "gpt-4o-mini")
     engines = [
         (OPENAI_CHAT_URL, secrets.get("OPENAI_API_KEY"), model),
@@ -172,8 +214,9 @@ def enhance_prompt(text, mode="task", timeout=API_TIMEOUT_S):
         )
     last_err = None
     for url, key, m in configured:
+        img = image_b64 if url == OPENAI_CHAT_URL else None
         try:
-            out = _chat_request(url, key, m, text, timeout, system)
+            out = _chat_request(url, key, m, text, timeout, system, image_b64=img)
             if out:
                 return out
             last_err = EnhanceError("empty completion")
@@ -314,9 +357,64 @@ def stop_recording(proc):
         pass
 
 
-def handle_utterance(wav_path, window_id, enhance=""):
-    """Transcribe + inject one utterance. `enhance` is "" (plain), "task", or
-    "followup". Never raises; deletes wav."""
+def _downscale(png_path):
+    from PIL import Image
+    with Image.open(png_path) as im:
+        im.thumbnail((SHOT_MAX_PX, SHOT_MAX_PX))
+        im.save(png_path)
+
+
+def capture_active_window(png_path):
+    """Grab the focused window region to png_path (downscaled). Return Path or None.
+
+    Best-effort: any failure logs and returns None so the caller degrades to a
+    text-only enhance. X11 only (session is x11).
+    """
+    png_path = Path(png_path)
+    try:
+        wid = subprocess.run(
+            ["xdotool", "getactivewindow"],
+            capture_output=True, check=True, timeout=5,
+        ).stdout.strip().decode()
+        geo = subprocess.run(
+            ["xdotool", "getwindowgeometry", "--shell", wid],
+            capture_output=True, check=True, timeout=5,
+        ).stdout.decode()
+        g = {}
+        for line in geo.splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                g[k.strip()] = v.strip()
+        region = f"{g['WIDTH']}x{g['HEIGHT']}"
+        offset = f"{os.environ.get('DISPLAY', ':0')}+{g['X']},{g['Y']}"
+        png_path.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+             "-f", "x11grab", "-video_size", region, "-i", offset,
+             "-frames:v", "1", str(png_path)],
+            check=True, timeout=10,
+        )
+        _downscale(png_path)
+        return png_path
+    except Exception as e:  # noqa: BLE001 — capture is best-effort
+        print(f"voice-typed: screenshot failed: {e}", flush=True)
+        return None
+
+
+def mode_for_code(code, enhcode, folcode, msgcode):
+    if code == msgcode:
+        return "message"
+    if code == enhcode:
+        return "task"
+    if code == folcode:
+        return "followup"
+    return ""
+
+
+def handle_utterance(wav_path, window_id, enhance="", shot_path=None):
+    """Transcribe + inject one utterance. `enhance` is "" (plain), "task",
+    "followup", or "message". `shot_path` is an optional screenshot PNG for
+    vision-grounded enhance. Never raises; deletes wav + shot."""
     try:
         try:
             text = transcribe(wav_path)
@@ -333,7 +431,7 @@ def handle_utterance(wav_path, window_id, enhance=""):
         if enhance:
             notify("✨ enhancing (follow-up)" if enhance == "followup" else "✨ enhancing")
             try:
-                text = enhance_prompt(text, enhance)
+                text = enhance_prompt(text, enhance, image_path=shot_path)
                 print(f"voice-typed: enhanced -> {text[:60]!r}", flush=True)
             except EnhanceError as e:
                 notify(f"enhance failed — raw text: {e}")
@@ -352,12 +450,14 @@ def handle_utterance(wav_path, window_id, enhance=""):
             notify(f"injection failed: {e}")
     finally:
         Path(wav_path).unlink(missing_ok=True)
+        if shot_path:
+            Path(shot_path).unlink(missing_ok=True)
 
 
 def stt_worker(q):
     while True:
-        wav_path, window_id, enhance = q.get()
-        handle_utterance(wav_path, window_id, enhance)
+        wav_path, window_id, enhance, shot_path = q.get()
+        handle_utterance(wav_path, window_id, enhance, shot_path)
         q.task_done()
 
 
@@ -434,13 +534,13 @@ def main():
     folcode = getattr(ecodes, folname, None)
     if folcode is None:
         sys.exit(f"unknown VOICE_TYPED_FOLLOWUP_KEY: {folname}")
+    msgname = os.environ.get("VOICE_TYPED_MSG_KEY", "KEY_F6")
+    msgcode = getattr(ecodes, msgname, None)
+    if msgcode is None:
+        sys.exit(f"unknown VOICE_TYPED_MSG_KEY: {msgname}")
 
     def mode_for(code):
-        if code == enhcode:
-            return "task"
-        if code == folcode:
-            return "followup"
-        return ""
+        return mode_for_code(code, enhcode, folcode, msgcode)
     devs, denied = find_keyboards(keycode)
     if not devs:
         sys.exit(
@@ -453,9 +553,11 @@ def main():
     if os.environ.get("VOICE_TYPED_GRAB", "1") != "0":
         threading.Thread(target=x11_grab_key, args=(enhname,), daemon=True).start()
         threading.Thread(target=x11_grab_key, args=(folname,), daemon=True).start()
+        threading.Thread(target=x11_grab_key, args=(msgname,), daemon=True).start()
 
     rec = None            # active pw-record Popen or None
     wav = None            # Path of in-flight recording
+    shot = None           # Path of in-flight screenshot (screenshot-modes only) or None
     deadline = 0.0        # monotonic cutoff for MAX_UTTERANCE_S cap
     awaiting_release = False  # cap fired while key held; swallow next keyup
     rec_key = None        # keycode that started the in-flight recording
@@ -463,7 +565,7 @@ def main():
 
     print(
         f"voice-typed: {len(devs)} device(s), key={keyname}, "
-        f"enhance={enhname}, followup={folname}",
+        f"enhance={enhname}, followup={folname}, message={msgname}",
         flush=True,
     )
     while True:
@@ -490,7 +592,7 @@ def main():
                 rec = None
                 awaiting_release = True
                 notify(f"{MAX_UTTERANCE_S}s cap — transcribing")
-                q.put((wav, active_window(), mode_for(rec_key)))
+                q.put((wav, active_window(), mode_for(rec_key), shot))
 
         for d in r:
             try:
@@ -504,7 +606,7 @@ def main():
                 continue
             for ev in events:
                 if ev.type != ecodes.EV_KEY or ev.code not in (
-                    keycode, flagcode, enhcode, folcode,
+                    keycode, flagcode, enhcode, folcode, msgcode,
                 ):
                     continue
                 if ev.code == flagcode:
@@ -520,6 +622,11 @@ def main():
                         rec = None
                         continue
                     rec_key = ev.code
+                    shot = None
+                    if mode_for(ev.code) in SCREENSHOT_MODES:
+                        shot = capture_active_window(
+                            run_dir / f"shot-{int(time.time() * 1000)}.png"
+                        )
                     deadline = time.monotonic() + MAX_UTTERANCE_S
                     print(
                         f"voice-typed: keydown code={ev.code} mode={mode_for(ev.code)!r}",
@@ -528,6 +635,7 @@ def main():
                     notify({
                         "task": "🎙 recording (enhance)",
                         "followup": "🎙 recording (follow-up)",
+                        "message": "🎙 recording (message)",
                     }.get(mode_for(ev.code), "🎙 recording"))
                 elif ev.value == 0 and ev.code == rec_key:
                     # keyup (value 2 autorepeat ignored); other key's keyup ignored
@@ -538,7 +646,7 @@ def main():
                         stop_recording(rec)
                         rec = None
                         notify("… transcribing")
-                        q.put((wav, active_window(), mode_for(rec_key)))
+                        q.put((wav, active_window(), mode_for(rec_key), shot))
                         rec_key = None
 
 
