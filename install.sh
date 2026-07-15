@@ -4,11 +4,11 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 echo "[1/6] apt deps"
-sudo apt-get install -y xdotool xclip python3-evdev python3-requests \
-  python3-pytest pipewire-bin libnotify-bin
+sudo apt-get install -y xdotool xclip python3-evdev python3-requests python3-pil \
+  python3-pytest pipewire-bin libnotify-bin ffmpeg
 
 echo "[2/6] preflight runtime binaries"
-for bin in pw-record xdotool notify-send xclip; do
+for bin in pw-record xdotool notify-send xclip ffmpeg; do
   command -v "$bin" >/dev/null || { echo "MISSING: $bin"; exit 1; }
 done
 

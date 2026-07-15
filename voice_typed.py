@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """voice-typed — hold-to-talk dictation daemon (X11/GNOME).
 
-Hold VOICE_TYPED_KEY (default F9), speak, release -> text typed into
-focused window via xdotool. STT: OpenAI gpt-4o-transcribe, Groq fallback.
+Hold a key, speak, release -> text typed into the focused window via xdotool.
+Keys: F9 verbatim | F8 new-task enhance | F7 follow-up enhance (+screenshot) |
+F6 chat message (+screenshot) | F10 flag last. Screenshot modes grab the active
+window and send it to a vision model for on-screen grounding.
+STT: OpenAI gpt-4o-transcribe, Groq fallback. Enhance: gpt-4o-mini (vision).
 """
 import base64
 import os
