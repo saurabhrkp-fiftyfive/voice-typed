@@ -76,7 +76,7 @@ LAST_TEXT = ""  # last typed transcript, held in memory for ⚑ flagging only
 MAX_UTTERANCE_S = 300
 API_TIMEOUT_S = 30  # per-engine connect+read timeout, NOT total deadline
 SCREENSHOT_MODES = {"followup", "message"}
-SHOT_MAX_PX = 1024  # longest side sent to the vision model
+SHOT_MAX_PX = 1568  # longest side sent to the vision model (keeps on-screen text legible)
 
 
 class TranscribeError(Exception):
@@ -202,6 +202,12 @@ def enhance_prompt(text, mode="task", timeout=API_TIMEOUT_S, image_path=None):
             print(f"voice-typed: image encode failed: {e}", flush=True)
     if image_b64 and mode != "message":
         system = GROUNDING_LINE + "\n\n" + system
+    vocab = load_vocab()
+    if vocab:
+        system += (
+            "\n\nPreserve the EXACT spelling of any of these names/terms that appear: "
+            + vocab.replace("Vocabulary: ", "", 1)
+        )
     model = os.environ.get("VOICE_TYPED_ENHANCE_MODEL", "gpt-4o-mini")
     engines = [
         (OPENAI_CHAT_URL, secrets.get("OPENAI_API_KEY"), model),
@@ -432,6 +438,7 @@ def handle_utterance(wav_path, window_id, enhance="", shot_path=None):
             notify("✨ enhancing (follow-up)" if enhance == "followup" else "✨ enhancing")
             try:
                 text = enhance_prompt(text, enhance, image_path=shot_path)
+                text = apply_corrections(text)  # LLM may re-spell; re-normalize known terms
                 print(f"voice-typed: enhanced -> {text[:60]!r}", flush=True)
             except EnhanceError as e:
                 notify(f"enhance failed — raw text: {e}")

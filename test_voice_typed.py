@@ -359,14 +359,14 @@ def test_enhance_prompt_task_uses_enhance_system(secrets_file, monkeypatch):
     monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
     with mock.patch.object(vt.requests, "post", return_value=_chat_resp()) as post:
         vt.enhance_prompt("x")  # default mode="task"
-        assert post.call_args.kwargs["json"]["messages"][0]["content"] == vt.ENHANCE_SYSTEM
+        assert post.call_args.kwargs["json"]["messages"][0]["content"].startswith(vt.ENHANCE_SYSTEM)
 
 
 def test_enhance_prompt_followup_uses_followup_system(secrets_file, monkeypatch):
     monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
     with mock.patch.object(vt.requests, "post", return_value=_chat_resp()) as post:
         vt.enhance_prompt("x", "followup")
-        assert post.call_args.kwargs["json"]["messages"][0]["content"] == vt.FOLLOWUP_SYSTEM
+        assert post.call_args.kwargs["json"]["messages"][0]["content"].startswith(vt.FOLLOWUP_SYSTEM)
 
 
 def test_inject_force_paste_overrides_type(monkeypatch):
@@ -494,7 +494,7 @@ def test_enhance_prompt_message_uses_msg_system(secrets_file, monkeypatch):
     monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
     with mock.patch.object(vt.requests, "post", return_value=_chat_resp()) as post:
         vt.enhance_prompt("say hi", "message")
-        assert post.call_args.kwargs["json"]["messages"][0]["content"] == vt.MSG_SYSTEM
+        assert post.call_args.kwargs["json"]["messages"][0]["content"].startswith(vt.MSG_SYSTEM)
 
 
 def test_enhance_prompt_with_image_sends_vision_array_to_openai(secrets_file, tmp_path, monkeypatch):
@@ -612,3 +612,37 @@ def test_handle_utterance_unlinks_shot_even_on_failure(wav_file, tmp_path, monke
     vt.handle_utterance(wav_file, None, enhance="message", shot_path=shot)
     assert not shot.exists()
     assert not wav_file.exists()
+
+
+def test_enhance_prompt_appends_vocab_spelling_guard(secrets_file, tmp_path, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    v = tmp_path / "vocab.txt"
+    v.write_text("Ada\nLinus\n")
+    monkeypatch.setattr(vt, "VOCAB_PATH", v)
+    with mock.patch.object(vt.requests, "post", return_value=_chat_resp()) as post:
+        vt.enhance_prompt("x", "message")
+        system = post.call_args.kwargs["json"]["messages"][0]["content"]
+        assert "Ada" in system and "Linus" in system
+        assert vt.MSG_SYSTEM in system  # guard is appended, base prompt intact
+
+
+def test_enhance_prompt_no_vocab_no_guard(secrets_file, tmp_path, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    monkeypatch.setattr(vt, "VOCAB_PATH", tmp_path / "nope.txt")
+    with mock.patch.object(vt.requests, "post", return_value=_chat_resp()) as post:
+        vt.enhance_prompt("x", "message")
+        assert post.call_args.kwargs["json"]["messages"][0]["content"] == vt.MSG_SYSTEM
+
+
+def test_handle_utterance_reapplies_corrections_after_enhance(wav_file, tmp_path, monkeypatch):
+    monkeypatch.setattr(vt, "transcribe", lambda p: "raw")
+    monkeypatch.setattr(
+        vt, "enhance_prompt", lambda t, mode="task", image_path=None: "call Linuz now"
+    )
+    c = tmp_path / "c.txt"
+    c.write_text("Linuz => Linus\n")
+    monkeypatch.setattr(vt, "CORRECTIONS_PATH", c)
+    calls = []
+    monkeypatch.setattr(vt, "inject", lambda t, force_paste=False: calls.append(t))
+    vt.handle_utterance(wav_file, None, enhance="message")
+    assert calls == ["call Linus now"]
