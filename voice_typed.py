@@ -73,6 +73,7 @@ LAST_TEXT = ""  # last typed transcript, held in memory for ⚑ flagging only
 MAX_UTTERANCE_S = 300
 API_TIMEOUT_S = 30  # per-engine connect+read timeout, NOT total deadline
 SCREENSHOT_MODES = {"followup", "message"}
+SHOT_MAX_PX = 1024  # longest side sent to the vision model
 
 
 class TranscribeError(Exception):
@@ -351,6 +352,50 @@ def stop_recording(proc):
             proc.wait()
     except OSError:
         pass
+
+
+def _downscale(png_path):
+    from PIL import Image
+    with Image.open(png_path) as im:
+        im.thumbnail((SHOT_MAX_PX, SHOT_MAX_PX))
+        im.save(png_path)
+
+
+def capture_active_window(png_path):
+    """Grab the focused window region to png_path (downscaled). Return Path or None.
+
+    Best-effort: any failure logs and returns None so the caller degrades to a
+    text-only enhance. X11 only (session is x11).
+    """
+    png_path = Path(png_path)
+    try:
+        wid = subprocess.run(
+            ["xdotool", "getactivewindow"],
+            capture_output=True, check=True, timeout=5,
+        ).stdout.strip().decode()
+        geo = subprocess.run(
+            ["xdotool", "getwindowgeometry", "--shell", wid],
+            capture_output=True, check=True, timeout=5,
+        ).stdout.decode()
+        g = {}
+        for line in geo.splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                g[k.strip()] = v.strip()
+        region = f"{g['WIDTH']}x{g['HEIGHT']}"
+        offset = f"{os.environ.get('DISPLAY', ':0')}+{g['X']},{g['Y']}"
+        png_path.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+             "-f", "x11grab", "-video_size", region, "-i", offset,
+             "-frames:v", "1", str(png_path)],
+            check=True, timeout=10,
+        )
+        _downscale(png_path)
+        return png_path
+    except Exception as e:  # noqa: BLE001 — capture is best-effort
+        print(f"voice-typed: screenshot failed: {e}", flush=True)
+        return None
 
 
 def mode_for_code(code, enhcode, folcode, msgcode):

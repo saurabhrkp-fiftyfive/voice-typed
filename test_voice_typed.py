@@ -540,3 +540,47 @@ def test_enhance_prompt_no_image_stays_plain_string(secrets_file, monkeypatch):
     with mock.patch.object(vt.requests, "post", return_value=_chat_resp()) as post:
         vt.enhance_prompt("fix bug")
         assert post.call_args.kwargs["json"]["messages"][1]["content"] == "fix bug"
+
+
+_GEO = b"WINDOW=12345\nX=100\nY=50\nWIDTH=800\nHEIGHT=600\nSCREEN=0\n"
+
+
+def test_capture_active_window_builds_region_and_returns_path(tmp_path, monkeypatch):
+    png = tmp_path / "shot.png"
+    wid = mock.Mock(stdout=b"12345\n")
+    geo = mock.Mock(stdout=_GEO)
+    ff = mock.Mock(stdout=b"")
+    monkeypatch.setattr(vt, "_downscale", lambda p: None)  # skip real PIL
+    with mock.patch.object(vt.subprocess, "run", side_effect=[wid, geo, ff]) as run:
+        out = vt.capture_active_window(png)
+        assert out == png
+        ffmpeg_cmd = run.call_args_list[2].args[0]
+        assert ffmpeg_cmd[0] == "ffmpeg"
+        assert "800x600" in ffmpeg_cmd
+        assert any(a.endswith("+100,50") for a in ffmpeg_cmd)  # DISPLAY+X,Y offset
+
+
+def test_capture_active_window_ffmpeg_failure_returns_none(tmp_path, monkeypatch):
+    png = tmp_path / "shot.png"
+    wid = mock.Mock(stdout=b"12345\n")
+    geo = mock.Mock(stdout=_GEO)
+    err = vt.subprocess.CalledProcessError(1, "ffmpeg")
+    monkeypatch.setattr(vt, "_downscale", lambda p: None)
+    with mock.patch.object(vt.subprocess, "run", side_effect=[wid, geo, err]):
+        assert vt.capture_active_window(png) is None
+
+
+def test_capture_active_window_xdotool_failure_returns_none(tmp_path, monkeypatch):
+    png = tmp_path / "shot.png"
+    err = vt.subprocess.CalledProcessError(1, "xdotool")
+    with mock.patch.object(vt.subprocess, "run", side_effect=[err]):
+        assert vt.capture_active_window(png) is None
+
+
+def test_downscale_shrinks_large_image(tmp_path):
+    from PIL import Image
+    p = tmp_path / "big.png"
+    Image.new("RGB", (4000, 3000), "white").save(p)
+    vt._downscale(p)
+    with Image.open(p) as im:
+        assert max(im.size) <= vt.SHOT_MAX_PX
