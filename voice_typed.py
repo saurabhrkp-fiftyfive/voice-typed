@@ -4,6 +4,7 @@
 Hold VOICE_TYPED_KEY (default F9), speak, release -> text typed into
 focused window via xdotool. STT: OpenAI gpt-4o-transcribe, Groq fallback.
 """
+import base64
 import os
 import queue
 import re
@@ -47,6 +48,22 @@ Rules:
 - Keep it a direct instruction or correction (e.g. "Also handle X", "No, use Y instead", "Now run the tests"). Use " | " only to separate genuinely distinct points.
 - Output ONLY the rewritten message. No preamble, no commentary, no code fences around the output.
 """
+MSG_SYSTEM = """\
+You rewrite raw dictated speech into a message the speaker wants to send, using an attached screenshot of their current screen as grounding context.
+
+Rules:
+- The dictation is the SOURCE OF TRUTH for what to say. The screenshot only grounds references — who "him/her/they" is, the ongoing topic, names, the question being answered, quoted text. NEVER add content, claims, or details the speaker did not intend just because they appear on screen.
+- Completeness beats brevity: carry over everything the speaker said. Fix grammar, remove filler ("um", "you know") and false starts, and turn rambling speech into a clear, direct message. Never add requirements or facts the speaker did not say.
+- Write in a natural human messaging tone (chat/DM) — not a formal report, not a coding-agent prompt — unless the speaker explicitly asked for another tone.
+- Output the whole message on ONE physical line — no newline characters anywhere.
+- Output ONLY the message. No preamble, no commentary, no code fences.
+"""
+GROUNDING_LINE = (
+    "A screenshot of the current screen is attached for context. Use it ONLY to "
+    "ground references in the dictation — visible output, error messages, filenames, "
+    "names, the topic, who is being replied to. Never add facts from the screenshot "
+    "that the speaker did not reference."
+)
 SECRETS_PATH = Path.home() / ".config" / "secrets.env"
 VOCAB_PATH = Path(__file__).resolve().parent / "vocab.txt"
 VOCAB_MAX_CHARS = 800  # ~200 tokens; whisper prompt cap is 224 tokens
@@ -137,7 +154,19 @@ def transcribe(wav_path, timeout=API_TIMEOUT_S):
     raise TranscribeError(f"all engines failed: {last_err}")
 
 
-def _chat_request(url, key, model, text, timeout, system=ENHANCE_SYSTEM):
+def _encode_image(path):
+    return base64.b64encode(Path(path).read_bytes()).decode()
+
+
+def _chat_request(url, key, model, text, timeout, system=ENHANCE_SYSTEM, image_b64=None):
+    if image_b64:
+        user_content = [
+            {"type": "text", "text": text},
+            {"type": "image_url",
+             "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
+        ]
+    else:
+        user_content = text
     r = requests.post(
         url,
         headers={"Authorization": f"Bearer {key}"},
@@ -145,7 +174,7 @@ def _chat_request(url, key, model, text, timeout, system=ENHANCE_SYSTEM):
             "model": model,
             "messages": [
                 {"role": "system", "content": system},
-                {"role": "user", "content": text},
+                {"role": "user", "content": user_content},
             ],
             "temperature": 0.3,
         },
@@ -155,12 +184,20 @@ def _chat_request(url, key, model, text, timeout, system=ENHANCE_SYSTEM):
     return r.json()["choices"][0]["message"]["content"].strip()
 
 
-def enhance_prompt(text, mode="task", timeout=API_TIMEOUT_S):
+def enhance_prompt(text, mode="task", timeout=API_TIMEOUT_S, image_path=None):
     try:
         secrets = load_secrets()
     except OSError as e:
         raise EnhanceError(f"cannot read secrets: {e}") from e
-    system = FOLLOWUP_SYSTEM if mode == "followup" else ENHANCE_SYSTEM
+    system = {"message": MSG_SYSTEM, "followup": FOLLOWUP_SYSTEM}.get(mode, ENHANCE_SYSTEM)
+    image_b64 = None
+    if image_path:
+        try:
+            image_b64 = _encode_image(image_path)
+        except OSError as e:
+            print(f"voice-typed: image encode failed: {e}", flush=True)
+    if image_b64 and mode != "message":
+        system = GROUNDING_LINE + "\n\n" + system
     model = os.environ.get("VOICE_TYPED_ENHANCE_MODEL", "gpt-4o-mini")
     engines = [
         (OPENAI_CHAT_URL, secrets.get("OPENAI_API_KEY"), model),
@@ -173,8 +210,9 @@ def enhance_prompt(text, mode="task", timeout=API_TIMEOUT_S):
         )
     last_err = None
     for url, key, m in configured:
+        img = image_b64 if url == OPENAI_CHAT_URL else None
         try:
-            out = _chat_request(url, key, m, text, timeout, system)
+            out = _chat_request(url, key, m, text, timeout, system, image_b64=img)
             if out:
                 return out
             last_err = EnhanceError("empty completion")

@@ -471,3 +471,72 @@ def test_screenshot_modes_gate():
     assert "message" in vt.SCREENSHOT_MODES
     assert "task" not in vt.SCREENSHOT_MODES
     assert "" not in vt.SCREENSHOT_MODES
+
+
+def _png_bytes():
+    # 1x1 white PNG
+    from PIL import Image
+    import io
+    buf = io.BytesIO()
+    Image.new("RGB", (1, 1), "white").save(buf, "PNG")
+    return buf.getvalue()
+
+
+def test_encode_image_roundtrip(tmp_path):
+    import base64
+    p = tmp_path / "s.png"
+    raw = _png_bytes()
+    p.write_bytes(raw)
+    assert base64.b64decode(vt._encode_image(p)) == raw
+
+
+def test_enhance_prompt_message_uses_msg_system(secrets_file, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    with mock.patch.object(vt.requests, "post", return_value=_chat_resp()) as post:
+        vt.enhance_prompt("say hi", "message")
+        assert post.call_args.kwargs["json"]["messages"][0]["content"] == vt.MSG_SYSTEM
+
+
+def test_enhance_prompt_with_image_sends_vision_array_to_openai(secrets_file, tmp_path, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    p = tmp_path / "s.png"
+    p.write_bytes(_png_bytes())
+    with mock.patch.object(vt.requests, "post", return_value=_chat_resp()) as post:
+        vt.enhance_prompt("describe", "message", image_path=p)
+        content = post.call_args_list[0].kwargs["json"]["messages"][1]["content"]
+        assert isinstance(content, list)
+        assert content[0] == {"type": "text", "text": "describe"}
+        assert content[1]["type"] == "image_url"
+        assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_enhance_prompt_groq_fallback_drops_image(secrets_file, tmp_path, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    p = tmp_path / "s.png"
+    p.write_bytes(_png_bytes())
+    with mock.patch.object(
+        vt.requests, "post",
+        side_effect=[_chat_resp(500), _chat_resp(content="via groq")],
+    ) as post:
+        assert vt.enhance_prompt("x", "followup", image_path=p) == "via groq"
+        # OpenAI (first) got the vision array; Groq (second) got a plain string
+        assert isinstance(post.call_args_list[0].kwargs["json"]["messages"][1]["content"], list)
+        assert post.call_args_list[1].kwargs["json"]["messages"][1]["content"] == "x"
+
+
+def test_enhance_prompt_followup_image_prepends_grounding(secrets_file, tmp_path, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    p = tmp_path / "s.png"
+    p.write_bytes(_png_bytes())
+    with mock.patch.object(vt.requests, "post", return_value=_chat_resp()) as post:
+        vt.enhance_prompt("x", "followup", image_path=p)
+        system = post.call_args_list[0].kwargs["json"]["messages"][0]["content"]
+        assert system.startswith(vt.GROUNDING_LINE)
+        assert vt.FOLLOWUP_SYSTEM in system
+
+
+def test_enhance_prompt_no_image_stays_plain_string(secrets_file, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    with mock.patch.object(vt.requests, "post", return_value=_chat_resp()) as post:
+        vt.enhance_prompt("fix bug")
+        assert post.call_args.kwargs["json"]["messages"][1]["content"] == "fix bug"
