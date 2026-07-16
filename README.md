@@ -16,12 +16,15 @@ recorded only while a key is held, transcribed once, then deleted.
 |-----|---------|------|-------------|-----------|---------------|
 | **F9** | `VOICE_TYPED_KEY` | verbatim | opt-in | no | types transcript as-is; `behavior.polish_dictation = true` adds a light grammar/phrasing cleanup (`POLISH_SYSTEM`) |
 | **F8** | `VOICE_TYPED_ENHANCE_KEY` | new-task enhance | yes | no | `ENHANCE_SYSTEM` — rewrites ramble into a structured coding-agent prompt |
-| **F7** | `VOICE_TYPED_FOLLOWUP_KEY` | follow-up enhance | yes | **yes** | `FOLLOWUP_SYSTEM` (+ grounding line) — continuation message for an active agent session |
+| **F7** | `VOICE_TYPED_FOLLOWUP_KEY` | follow-up enhance | yes | **yes** | `FOLLOWUP_SYSTEM` (+ grounding line) — continuation message for an active agent session; the screenshot is READ-ONLY context to shape a grounded follow-up, never copied/answered as output |
 | **F6** | `VOICE_TYPED_MSG_KEY` | chat message | yes | **yes** | `MSG_SYSTEM` — natural chat/DM reply grounded in on-screen thread |
 | **F10** | `VOICE_TYPED_FLAG_KEY` | flag last | no | no | appends last utterance to `flagged.md` |
 
 `SCREENSHOT_MODES = {"followup", "message"}` gates capture. F8/F9 never capture
 (F8 is a new-task start point — screen is usually blank; F9 is raw dictation).
+For F7 the screenshot is grounding context only: the grounding line tells the
+model to build the follow-up from the dictation and never reproduce the
+on-screen chat's output.
 
 ---
 
@@ -198,7 +201,7 @@ on).
 |-----|---------|---------|
 | `VOICE_TYPED_KEY` | `KEY_F9` | verbatim dictation key (evdev name) |
 | `VOICE_TYPED_ENHANCE_KEY` | `KEY_F8` | new-task enhance key |
-| `VOICE_TYPED_FOLLOWUP_KEY` | `KEY_F7` | follow-up enhance key (+screenshot) |
+| `VOICE_TYPED_FOLLOWUP_KEY` | `KEY_F7` | follow-up enhance key (+screenshot context) |
 | `VOICE_TYPED_MSG_KEY` | `KEY_F6` | chat-message key (+screenshot) |
 | `VOICE_TYPED_FLAG_KEY` | `KEY_F10` | flag-last key |
 | `VOICE_TYPED_ENHANCE_MODEL` | `gpt-4o-mini` | enhance model override |

@@ -136,7 +136,7 @@ const TOKEN = new URLSearchParams(location.search).get("token") || "";
 const ACTIONS = [
   ["dictate",  "Dictate (verbatim)",  "hold to talk, types transcript as-is"],
   ["enhance",  "Enhance (new task)",  "rewrites ramble into a structured prompt"],
-  ["followup", "Follow-up",           "continuation message, + screenshot grounding"],
+  ["followup", "Follow-up",           "continuation prompt; screenshot = context only, not copied"],
   ["message",  "Chat message",        "DM/chat reply, + screenshot grounding"],
   ["flag",     "Flag last",           "log last transcript as mistranscribed"],
 ];

@@ -2,7 +2,7 @@
 """voice-typed — hold-to-talk dictation daemon (X11/GNOME).
 
 Hold a key, speak, release -> text typed into the focused window via xdotool.
-Keys: F9 verbatim | F8 new-task enhance | F7 follow-up enhance (+screenshot) |
+Keys: F9 verbatim | F8 new-task enhance | F7 follow-up enhance (+screenshot context) |
 F6 chat message (+screenshot) | F10 flag last. Screenshot modes grab the active
 window and send it to a vision model for on-screen grounding.
 STT: OpenAI gpt-4o-transcribe, Groq fallback. Enhance: gpt-4o-mini (vision).
@@ -76,10 +76,14 @@ Rules:
 - Output ONLY the cleaned-up text. No preamble, no commentary, no quotes, no code fences.
 """
 GROUNDING_LINE = (
-    "A screenshot of the current screen is attached for context. Use it ONLY to "
-    "ground references in the dictation — visible output, error messages, filenames, "
-    "names, the topic, who is being replied to. Never add facts from the screenshot "
-    "that the speaker did not reference."
+    "A screenshot of the current screen — the active agent session/chat — is attached "
+    "as READ-ONLY CONTEXT. Use it only to understand the current state (what the agent "
+    "last did, visible output, error messages, filenames, the topic) so the follow-up "
+    "you write is grounded and specific. Your OUTPUT must be the speaker's follow-up "
+    "instruction, built from their dictation. NEVER copy, quote, summarize, or answer "
+    "the on-screen chat; never reproduce an assistant reply or any visible text as your "
+    "output. The screenshot only INFORMS the follow-up — it is never the content, and "
+    "you add nothing the speaker did not say."
 )
 TRANSLITERATE_SYSTEM = """\
 You transliterate Hindi (Devanagari) text into the Latin/Roman alphabet.
