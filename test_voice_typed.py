@@ -97,6 +97,42 @@ def test_transcribe_no_keys_raises_clear_error(wav_file, tmp_path, monkeypatch):
         vt.transcribe(wav_file)
 
 
+def test_transcribe_custom_stt_url_tried_first(wav_file, secrets_file, tmp_path, monkeypatch):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[engines]\nstt_url = "http://127.0.0.1:8000/v1/audio/transcriptions"\n'
+                   'stt_model = "Systran/faster-whisper-small"\n')
+    monkeypatch.setattr(vt, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    with mock.patch.object(vt.requests, "post", return_value=_resp(text="local")) as post:
+        assert vt.transcribe(wav_file) == "local"
+        call = post.call_args_list[0]
+        assert call.args[0] == "http://127.0.0.1:8000/v1/audio/transcriptions"
+        assert call.kwargs["data"]["model"] == "Systran/faster-whisper-small"
+
+
+def test_transcribe_custom_stt_url_needs_no_cloud_key(wav_file, tmp_path, monkeypatch):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[engines]\nstt_url = "http://127.0.0.1:8000/v1/audio/transcriptions"\n')
+    empty = tmp_path / "empty.env"
+    empty.write_text("# no keys\n")
+    monkeypatch.setattr(vt, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(vt, "SECRETS_PATH", empty)
+    with mock.patch.object(vt.requests, "post", return_value=_resp(text="offline")):
+        assert vt.transcribe(wav_file) == "offline"
+
+
+def test_transcribe_custom_stt_falls_back_to_cloud(wav_file, secrets_file, tmp_path, monkeypatch):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[engines]\nstt_url = "http://127.0.0.1:8000/v1/audio/transcriptions"\n')
+    monkeypatch.setattr(vt, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    with mock.patch.object(
+        vt.requests, "post", side_effect=[_resp(500), _resp(text="cloud saved us")]
+    ) as post:
+        assert vt.transcribe(wav_file) == "cloud saved us"
+        assert post.call_args_list[1].args[0] == vt.OPENAI_URL
+
+
 def test_inject_empty_is_noop():
     with mock.patch.object(vt.subprocess, "run") as run:
         vt.inject("   \n")

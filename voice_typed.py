@@ -98,7 +98,8 @@ DEFAULT_CONFIG = {
         "dictate": "KEY_F9", "enhance": "KEY_F8", "followup": "KEY_F7",
         "message": "KEY_F6", "flag": "KEY_F10",
     },
-    "engines": {"enhance_model": "gpt-4o-mini", "api_timeout_s": 30},
+    "engines": {"enhance_model": "gpt-4o-mini", "api_timeout_s": 30,
+                "stt_url": "", "stt_model": ""},
     "behavior": {
         "paste_mode": False, "grab_keys": True,
         "max_utterance_s": 300, "transliterate_devanagari": True,
@@ -258,7 +259,12 @@ def transcribe(wav_path, timeout=API_TIMEOUT_S):
         secrets = load_secrets()
     except OSError as e:
         raise TranscribeError(f"cannot read secrets: {e}") from e
-    engines = [
+    eng = load_config()["engines"]
+    engines = []
+    if eng["stt_url"]:  # custom/local OpenAI-compatible server, tried first
+        engines.append((eng["stt_url"], secrets.get("STT_API_KEY") or "none",
+                        eng["stt_model"] or "whisper-1"))
+    engines += [
         (OPENAI_URL, secrets.get("OPENAI_API_KEY"), "gpt-4o-transcribe"),
         (GROQ_URL, secrets.get("GROQ_API_KEY"), "whisper-large-v3"),
     ]
