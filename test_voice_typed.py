@@ -707,3 +707,41 @@ def test_dump_config_round_trips(tmp_path):
     out = tmp_path / "out.toml"
     out.write_text(vt.dump_config(cfg))
     assert vt.load_config(out) == cfg
+
+
+def test_migrate_copies_missing_targets(tmp_path):
+    legacy = tmp_path / "repo"; legacy.mkdir()
+    cfg_d = tmp_path / "cfg"; data_d = tmp_path / "data"
+    (legacy / "vocab.txt").write_text("Kubernetes\n")
+    (legacy / "corrections.txt").write_text("json => JSON\n")
+    (legacy / "flagged.md").write_text("- x\n")
+    moved = vt.migrate_user_files(cfg_d, data_d, legacy)
+    assert sorted(moved) == ["corrections.txt", "flagged.md", "vocab.txt"]
+    assert (cfg_d / "vocab.txt").read_text() == "Kubernetes\n"
+    assert (data_d / "flagged.md").read_text() == "- x\n"
+    assert (legacy / "vocab.txt").exists()  # copy, not move
+
+
+def test_migrate_skips_existing_and_missing(tmp_path):
+    legacy = tmp_path / "repo"; legacy.mkdir()
+    cfg_d = tmp_path / "cfg"; cfg_d.mkdir(); data_d = tmp_path / "data"
+    (legacy / "vocab.txt").write_text("OLD\n")
+    (cfg_d / "vocab.txt").write_text("NEW\n")   # target exists -> untouched
+    moved = vt.migrate_user_files(cfg_d, data_d, legacy)
+    assert moved == []                            # corrections/flagged absent -> no-op
+    assert (cfg_d / "vocab.txt").read_text() == "NEW\n"
+
+
+def test_resolve_user_paths_prefers_xdg(tmp_path, monkeypatch):
+    cfg_d = tmp_path / "cfg"; cfg_d.mkdir()
+    data_d = tmp_path / "data"; data_d.mkdir()
+    (cfg_d / "vocab.txt").write_text("x\n")
+    monkeypatch.setattr(vt, "CONFIG_DIR", cfg_d)
+    monkeypatch.setattr(vt, "DATA_DIR", data_d)
+    monkeypatch.setattr(vt, "VOCAB_PATH", vt.VOCAB_PATH)          # auto-restore
+    monkeypatch.setattr(vt, "CORRECTIONS_PATH", vt.CORRECTIONS_PATH)
+    monkeypatch.setattr(vt, "FLAGGED_PATH", vt.FLAGGED_PATH)
+    legacy_corrections = vt.CORRECTIONS_PATH
+    vt.resolve_user_paths()
+    assert vt.VOCAB_PATH == cfg_d / "vocab.txt"
+    assert vt.CORRECTIONS_PATH == legacy_corrections   # no XDG file -> legacy stays

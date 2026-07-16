@@ -79,10 +79,11 @@ Rules:
 """
 DEVANAGARI_RE = re.compile(r"[ऀ-ॿ]")
 SECRETS_PATH = Path.home() / ".config" / "secrets.env"
-VOCAB_PATH = Path(__file__).resolve().parent / "vocab.txt"
+LEGACY_DIR = Path(__file__).resolve().parent
+VOCAB_PATH = LEGACY_DIR / "vocab.txt"
 VOCAB_MAX_CHARS = 800  # ~200 tokens; whisper prompt cap is 224 tokens
-CORRECTIONS_PATH = Path(__file__).resolve().parent / "corrections.txt"
-FLAGGED_PATH = Path(__file__).resolve().parent / "flagged.md"
+CORRECTIONS_PATH = LEGACY_DIR / "corrections.txt"
+FLAGGED_PATH = LEGACY_DIR / "flagged.md"
 LAST_TEXT = ""  # last typed transcript, held in memory for ⚑ flagging only
 MAX_UTTERANCE_S = 300
 API_TIMEOUT_S = 30  # per-engine connect+read timeout, NOT total deadline
@@ -157,6 +158,43 @@ def dump_config(cfg):
                 lines.append(f'{k} = "{v}"')
         lines.append("")
     return "\n".join(lines)
+
+
+_USER_FILES = (  # (name, dest kind): config dir or data dir
+    ("vocab.txt", "config"), ("corrections.txt", "config"), ("flagged.md", "data"),
+)
+
+
+def migrate_user_files(config_dir=None, data_dir=None, legacy_dir=None):
+    """Copy legacy repo-dir user files to XDG dirs when targets missing.
+    Idempotent; returns names copied this run."""
+    import shutil as _shutil
+    config_dir = Path(config_dir or CONFIG_DIR)
+    data_dir = Path(data_dir or DATA_DIR)
+    legacy_dir = Path(legacy_dir or LEGACY_DIR)
+    copied = []
+    for name, kind in _USER_FILES:
+        dest = (config_dir if kind == "config" else data_dir) / name
+        src = legacy_dir / name
+        if dest.exists() or not src.exists():
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        _shutil.copy2(src, dest)
+        copied.append(name)
+    return copied
+
+
+def resolve_user_paths():
+    """Point the module path globals at XDG files when they exist."""
+    global VOCAB_PATH, CORRECTIONS_PATH, FLAGGED_PATH
+    for attr, kind, name in (
+        ("VOCAB_PATH", "config", "vocab.txt"),
+        ("CORRECTIONS_PATH", "config", "corrections.txt"),
+        ("FLAGGED_PATH", "data", "flagged.md"),
+    ):
+        p = (CONFIG_DIR if kind == "config" else DATA_DIR) / name
+        if p.exists():
+            globals()[attr] = p
 
 
 class TranscribeError(Exception):
@@ -631,6 +669,8 @@ def main():
     import select
     from evdev import ecodes
 
+    migrate_user_files()
+    resolve_user_paths()
     keyname = os.environ.get("VOICE_TYPED_KEY", "KEY_F9")
     keycode = getattr(ecodes, keyname, None)
     if keycode is None:
