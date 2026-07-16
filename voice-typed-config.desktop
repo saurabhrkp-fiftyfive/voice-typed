@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Voice Typed Settings
+Comment=Configure voice-typed dictation (shortcuts, corrections, vocabulary)
+Exec=voice-typed config
+Icon=audio-input-microphone
+Terminal=false
+Categories=Settings;Utility;
