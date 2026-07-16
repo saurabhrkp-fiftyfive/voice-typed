@@ -120,16 +120,47 @@ worker thread
 
 ---
 
-## Configuration files (same dir, all hot-reloaded)
+## Configuration
+
+Settings live in `~/.config/voice-typed/config.toml` (created by the installer;
+optional — absent file = these defaults):
+
+```toml
+[keys]
+dictate  = "KEY_F9"
+enhance  = "KEY_F8"
+followup = "KEY_F7"
+message  = "KEY_F6"
+flag     = "KEY_F10"
+
+[engines]
+enhance_model = "gpt-4o-mini"
+api_timeout_s = 30
+
+[behavior]
+paste_mode = false
+grab_keys = true
+max_utterance_s = 300
+transliterate_devanagari = true
+```
+
+Key-binding changes need `voice-typed restart`; everything else is picked up
+per utterance.
+
+### User files (hot-reloaded every utterance)
 
 | File | Purpose |
 |------|---------|
-| `vocab.txt` | Domain words / names, one per line (`#` comments). STT spelling bias **and** enhance spelling guard. Cap ~80 entries / 800 chars. |
-| `corrections.txt` | `wrong => right` pairs, `#` comments. Deterministic post-STT + post-enhance replace (case-insensitive, word-boundary). |
-| `flagged.md` | F10 log of bad transcripts for later correction. Runtime file — **gitignored**; `flagged.md.template` shows the format. |
-| `~/.config/secrets.env` | `OPENAI_API_KEY` / `GROQ_API_KEY` (`export KEY=value` lines). **Not** in this repo. |
+| `~/.config/voice-typed/vocab.txt` | Domain words / names, one per line (`#` comments). STT spelling bias **and** enhance spelling guard. Cap ~80 entries / 800 chars. |
+| `~/.config/voice-typed/corrections.txt` | `wrong => right` pairs, `#` comments. Deterministic post-STT + post-enhance replace (case-insensitive, word-boundary). |
+| `~/.local/share/voice-typed/flagged.md` | F10 log of bad transcripts for later correction. `flagged.md.template` shows the format. |
+| `~/.config/voice-typed/secrets.env` | `OPENAI_API_KEY` / `GROQ_API_KEY` (`KEY=value` lines, 0600). Legacy fallback: `~/.config/secrets.env`. |
 
-### Environment variables
+On first run, existing repo-dir `vocab.txt` / `corrections.txt` / `flagged.md`
+are **copied** to the paths above (one-time migration; XDG copies win from then
+on).
+
+### Environment variables (legacy — override config.toml)
 
 | Var | Default | Meaning |
 |-----|---------|---------|
@@ -147,14 +178,26 @@ worker thread
 ## Install
 
 ```bash
-./install.sh          # apt deps, input-group, tests, systemd user unit, enable+start
+./install.sh                     # apt deps, input-group, config scaffold, key prompt,
+                                 # tests, systemd unit, CLI symlink
+./install.sh --non-interactive   # no prompts (requires keys already configured)
+./install.sh --no-service        # skip the systemd unit
+./install.sh --uninstall         # remove unit/symlink/desktop entry (keeps settings)
+./install.sh --uninstall --purge # also delete settings + word lists (asks first)
 ```
 
 Deps: `xdotool xclip python3-evdev python3-requests python3-pil python3-pytest
 pipewire-bin libnotify-bin ffmpeg`. Requires membership of the `input` group
-(installer adds it — **log out/in** after first install).
+(installer adds it — **log out/in** after first install). Python ≥ 3.11.
 
-Service:
+CLI (installed to `~/.local/bin/voice-typed`):
+
+```bash
+voice-typed status|restart|stop|logs
+voice-typed doctor    # diagnose a broken install — paste this into bug reports
+```
+
+Service (equivalent raw commands):
 
 ```bash
 systemctl --user status  voice-typed
