@@ -1,0 +1,8 @@
+# voice-typed corrections — 'wrong => right', one per line, # comments.
+# Applied to every transcript before typing (case-insensitive, whole words).
+# Hot-reloaded per utterance — no restart needed.
+# Add pairs from flagged entries (F10) or via the web panel (voice-typed config).
+
+# examples (delete when you add real ones):
+# cooper netties => Kubernetes
+# post gress => Postgres

@@ -3,3 +3,8 @@ __pycache__/
 
 # runtime flag log (contains dictated utterances)
 flagged.md
+flagged-archive.md
+
+# personal word lists — start from the .template files
+vocab.txt
+corrections.txt

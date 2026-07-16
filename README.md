@@ -136,6 +136,8 @@ flag     = "KEY_F10"
 [engines]
 enhance_model = "gpt-4o-mini"
 api_timeout_s = 30
+stt_url = ""      # custom/local OpenAI-compatible STT endpoint (tried first)
+stt_model = ""    # model name for that endpoint (default whisper-1)
 
 [behavior]
 paste_mode = false
@@ -146,6 +148,30 @@ transliterate_devanagari = true
 
 Key-binding changes need `voice-typed restart`; everything else is picked up
 per utterance.
+
+### Web config panel
+
+```bash
+voice-typed config               # opens the panel in your browser
+voice-typed config --no-browser  # print the URL only (SSH: forward the port)
+```
+
+Runs a short-lived local web server and opens a five-tab panel:
+
+- **Shortcuts** — rebind any mode key by pressing it (F1–F10, A–Z, 0–9);
+  conflicts are detected before save.
+- **Corrections** — the F10 flag inbox: promote a bad transcript to a
+  `wrong => right` pair, add words to vocabulary, or dismiss; edit the
+  corrections table with a live preview.
+- **Vocabulary** — edit `vocab.txt` with a prompt-budget bar.
+- **Engines** — API keys (write-only fields, never displayed back), enhance
+  model, timeout, behavior toggles.
+- **Service** — daemon status, start/stop/restart, recent log.
+
+Security: binds to `127.0.0.1` only; every request needs a per-session random
+token (in the URL it prints); Host/Origin are checked against loopback; the
+server exits after 15 min idle. API keys are written to `secrets.env` (0600)
+and never echoed to the browser or logs.
 
 ### User files (hot-reloaded every utterance)
 
@@ -175,6 +201,21 @@ on).
 
 ---
 
+## Getting started
+
+What you need:
+
+| Requirement | Why |
+|-------------|-----|
+| Linux with an **X11** session (GNOME "Ubuntu on Xorg" etc.) | `xdotool` typing + `x11grab` screenshots — Wayland is not supported |
+| A microphone + PipeWire (`pw-record`) | audio capture while the key is held |
+| Python ≥ 3.11 | `tomllib` config parsing |
+| systemd user session | the daemon runs as a `systemd --user` unit |
+| Membership of the `input` group | reading the keyboard via evdev (installer adds it; log out/in once) |
+| **One** speech-to-text backend | an `OPENAI_API_KEY`, a free `GROQ_API_KEY`, or a local Whisper server (see below) |
+
+Then: clone, run `./install.sh`, log out/in if prompted, hold **F9** and speak.
+
 ## Install
 
 ```bash
@@ -195,6 +236,7 @@ CLI (installed to `~/.local/bin/voice-typed`):
 ```bash
 voice-typed status|restart|stop|logs
 voice-typed doctor    # diagnose a broken install — paste this into bug reports
+voice-typed config    # web config panel (see above)
 ```
 
 Service (equivalent raw commands):
@@ -207,32 +249,84 @@ journalctl --user -u voice-typed -f
 
 ---
 
+## Free & local speech-to-text
+
+You don't need a paid OpenAI account for dictation.
+
+### Free cloud (zero setup): Groq
+
+Groq's free tier serves `whisper-large-v3` — excellent dictation quality at $0.
+Put **only** a `GROQ_API_KEY` in `~/.config/voice-typed/secrets.env` (get one at
+console.groq.com) and the STT chain uses Groq automatically. The enhance modes
+(F6/F7/F8) then fall back to Groq's `llama-3.3-70b-versatile`, which is
+text-only — F9 dictation is unaffected, F6/F7 lose the screenshot grounding.
+
+### Fully local (offline): any OpenAI-compatible Whisper server
+
+Point `engines.stt_url` at a local server; it is tried **before** the cloud
+chain, and with it set no cloud key is required for F9 dictation:
+
+```toml
+[engines]
+stt_url = "http://127.0.0.1:8000/v1/audio/transcriptions"
+stt_model = "Systran/faster-whisper-small"
+```
+
+Servers that work out of the box:
+
+- **[speaches](https://github.com/speaches-ai/speaches)** (formerly
+  faster-whisper-server) — `docker run -p 8000:8000
+  ghcr.io/speaches-ai/speaches:latest-cpu`. Runs
+  [faster-whisper](https://github.com/SYSTRAN/faster-whisper) models
+  (`Systran/faster-whisper-small` is fast on CPU; `-medium`/`-large-v3` if you
+  have the RAM/GPU).
+- **[whisper.cpp](https://github.com/ggml-org/whisper.cpp)** `whisper-server`
+  — tiny C++ binary, great on modest hardware; start it with
+  `--inference-path /v1/audio/transcriptions` and set `stt_model` to anything
+  (the server ignores it).
+
+If the local server is down, the chain falls through to whatever cloud keys
+exist. A key for the server itself is optional (`STT_API_KEY` in `secrets.env`
+if yours needs one).
+
+Caveats vs. the cloud default: small local models are noticeably weaker on
+names/jargon (lean harder on `vocab.txt` + `corrections.txt`), and the
+enhance/vision modes still need a cloud chat model — local STT covers
+**verbatim dictation (F9)** fully offline.
+
+---
+
 ## Tests
 
 ```bash
-python3 -m pytest test_voice_typed.py -q      # 60 tests
+python3 -m pytest test_voice_typed.py test_config_server.py -q   # 103 tests
 ```
 
-Pure unit tests — `requests.post`, `subprocess`, and PIL paths are mocked; no
-network, no audio device, no real key grab. The live event loop + real capture
-are verified manually (hold a key and speak).
+Pure unit tests — `requests.post`, `subprocess`, and PIL paths are mocked; the
+config-server suite runs a real HTTP server on an ephemeral port against
+tmp-dir files. No network, no audio device, no real key grab. The live event
+loop + real capture are verified manually (hold a key and speak). CI runs both
+suites + shellcheck on every push (`.github/workflows/ci.yml`).
 
 ---
 
 ## Repo layout / what's here
 
 ```
-voice_typed.py        # the daemon (single file)
-test_voice_typed.py   # pytest suite (60 tests)
-install.sh            # installer
-voice-typed.service   # systemd --user unit
-vocab.txt             # STT bias + enhance spelling guard
-corrections.txt       # deterministic wrong=>right fixes
-flagged.md.template   # F10-log format example (runtime flagged.md is gitignored)
-docs/
-  2026-07-15-screen-context-dictation-design.md   # F6/screenshot feature design
-  2026-07-15-screen-context-dictation-plan.md      # its TDD implementation plan
-  MEMORY.md                                         # durable facts / gotchas (portable)
+voice_typed.py             # the daemon + CLI (single file)
+config_server.py           # web config panel HTTP server
+panel.html                 # the panel UI (vanilla JS, single file)
+test_voice_typed.py        # daemon pytest suite
+test_config_server.py      # panel/API pytest suite
+install.sh                 # installer / uninstaller
+voice-typed.service        # systemd --user unit
+voice-typed-config.desktop # app-grid launcher for the panel
+vocab.txt.template         # starting point for your word list (live copy is per-user)
+corrections.txt.template   # starting point for wrong=>right fixes
+flagged.md.template        # F10-log format example
+LICENSE                    # MIT
+.github/workflows/ci.yml   # pytest + shellcheck
+docs/                      # design docs, plans, gotcha list (MEMORY.md)
 README.md
 ```
 
@@ -247,5 +341,10 @@ README.md
 - **2026-07-15** — F7 follow-up + F6 chat-message modes with **active-window
   screenshot → vision grounding** (gpt-4o-mini). Then: enhance spelling guard,
   post-enhance re-correction, screenshot cap raised to 1568 px.
+- **2026-07-16** — productization: `config.toml` + XDG user files, `voice-typed`
+  CLI (`doctor`, service controls), installer v2 with uninstall, **web config
+  panel** (`voice-typed config` — shortcuts rebind, flag inbox, vocab budget,
+  key management, service controls), local-STT endpoint override, MIT license,
+  CI.
 
 See `docs/MEMORY.md` for the full gotcha list.

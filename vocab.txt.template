@@ -1,0 +1,17 @@
+# voice-typed vocabulary — one word/phrase per line, # = comment
+# Hot-reloaded every utterance; no daemon restart needed.
+# Keep under ~80 entries (prompt capped at 800 chars).
+# Add names, project names, and jargon the transcriber gets wrong.
+
+# people
+# Ada
+# Linus
+
+# projects / tools
+# Kubernetes
+# PostgreSQL
+# systemd
+
+# domain jargon
+# idempotent
+# wikilink

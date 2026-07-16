@@ -66,6 +66,8 @@ mkdir -p "$CONFIG_DIR" "$DATA_DIR"
 python3 -c "import voice_typed; print('migrated:', voice_typed.migrate_user_files() or 'nothing')"
 [ -f "$CONFIG_DIR/config.toml" ] || \
   python3 -c "import voice_typed as v; open('$CONFIG_DIR/config.toml','w').write(v.dump_config(v.DEFAULT_CONFIG))"
+[ -f "$CONFIG_DIR/vocab.txt" ]       || cp vocab.txt.template "$CONFIG_DIR/vocab.txt"
+[ -f "$CONFIG_DIR/corrections.txt" ] || cp corrections.txt.template "$CONFIG_DIR/corrections.txt"
 
 echo "[5/8] API keys"
 has_key() {
