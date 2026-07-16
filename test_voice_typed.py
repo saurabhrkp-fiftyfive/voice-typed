@@ -768,3 +768,50 @@ def test_inject_paste_mode_from_config(tmp_path, monkeypatch):
         with mock.patch.object(vt, "paste_chord", return_value="ctrl+v"):
             vt.inject("hello")
         assert run.call_args_list[0].args[0][:2] == ["xclip", "-selection"]
+
+
+def test_doctor_all_green_returns_zero(secrets_file, monkeypatch, capsys):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
+    monkeypatch.setattr(vt, "find_keyboards", lambda code: ([mock.Mock()], 0))
+    ok_run = mock.Mock(returncode=0, stdout=b"user input\n")
+    with mock.patch.object(vt.subprocess, "run", return_value=ok_run):
+        with mock.patch.object(vt.shutil, "which", return_value="/usr/bin/x"):
+            assert vt.doctor() == 0
+    out = capsys.readouterr().out
+    assert "❌" not in out
+
+
+def test_doctor_wayland_fails(secrets_file, monkeypatch, capsys):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+    monkeypatch.setattr(vt, "find_keyboards", lambda code: ([mock.Mock()], 0))
+    ok_run = mock.Mock(returncode=0, stdout=b"user input\n")
+    with mock.patch.object(vt.subprocess, "run", return_value=ok_run):
+        with mock.patch.object(vt.shutil, "which", return_value="/usr/bin/x"):
+            assert vt.doctor() == 1
+    assert "wayland" in capsys.readouterr().out.lower()
+
+
+def test_doctor_missing_keys_fails(tmp_path, monkeypatch):
+    empty = tmp_path / "e.env"; empty.write_text("# none\n")
+    monkeypatch.setattr(vt, "SECRETS_PATH", empty)
+    monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
+    monkeypatch.setattr(vt, "find_keyboards", lambda code: ([mock.Mock()], 0))
+    ok_run = mock.Mock(returncode=0, stdout=b"user input\n")
+    with mock.patch.object(vt.subprocess, "run", return_value=ok_run):
+        with mock.patch.object(vt.shutil, "which", return_value="/usr/bin/x"):
+            assert vt.doctor() == 1
+
+
+def test_cli_status_calls_systemctl(monkeypatch):
+    with mock.patch.object(vt.subprocess, "run", return_value=mock.Mock(returncode=0)) as run:
+        assert vt.cli(["status"]) == 0
+        assert run.call_args.args[0] == [
+            "systemctl", "--user", "status", "voice-typed", "--no-pager"]
+
+
+def test_cli_logs_calls_journalctl(monkeypatch):
+    with mock.patch.object(vt.subprocess, "run", return_value=mock.Mock(returncode=0)) as run:
+        assert vt.cli(["logs"]) == 0
+        assert run.call_args.args[0][0] == "journalctl"

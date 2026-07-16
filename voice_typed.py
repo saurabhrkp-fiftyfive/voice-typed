@@ -11,6 +11,7 @@ import base64
 import os
 import queue
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -798,5 +799,87 @@ def main():
                         rec_key = None
 
 
+REQUIRED_BINARIES = ("pw-record", "xdotool", "xclip", "notify-send", "ffmpeg")
+
+
+def doctor():
+    """Offline diagnostics. Prints one line per check; returns 0/1."""
+    from evdev import ecodes
+    checks = []
+
+    session = os.environ.get("XDG_SESSION_TYPE", "unknown")
+    checks.append((session == "x11", f"session type: {session}",
+                   "voice-typed is X11-only — log into an 'Ubuntu on Xorg' session"))
+
+    try:
+        groups = subprocess.run(["id", "-nG"], capture_output=True,
+                                check=True, timeout=5).stdout.decode().split()
+    except Exception:  # noqa: BLE001
+        groups = []
+    checks.append(("input" in groups, "member of 'input' group",
+                   "sudo usermod -aG input $USER, then log out and back in"))
+
+    missing = [b for b in REQUIRED_BINARIES if not shutil.which(b)]
+    checks.append((not missing, f"binaries: {', '.join(REQUIRED_BINARIES)}",
+                   f"sudo apt install … (missing: {', '.join(missing) or '-'})"))
+
+    try:
+        secrets = load_secrets()
+    except OSError:
+        secrets = {}
+    has_key = bool(secrets.get("OPENAI_API_KEY") or secrets.get("GROQ_API_KEY"))
+    checks.append((has_key, "API key configured (OpenAI and/or Groq)",
+                   f"add OPENAI_API_KEY to {SECRETS_PATH}"))
+
+    cfg = load_config()
+    bad = [f"{a}={n}" for a, n in cfg["keys"].items()
+           if getattr(ecodes, n, None) is None]
+    checks.append((not bad, "config.toml keys valid",
+                   f"fix in {CONFIG_PATH}: {', '.join(bad) or '-'}"))
+
+    code = getattr(ecodes, cfg["keys"]["dictate"], None)
+    devs, denied = find_keyboards(code) if code is not None else ([], 0)
+    for d in devs:
+        d.close()
+    checks.append((bool(devs), f"readable keyboard with {cfg['keys']['dictate']}",
+                   f"{denied} device(s) denied — re-login after joining 'input' group"))
+
+    unit = subprocess.run(["systemctl", "--user", "is-active", "voice-typed"],
+                          capture_output=True)
+    checks.append((unit.returncode == 0, "systemd unit active",
+                   "systemctl --user enable --now voice-typed"))
+
+    failed = 0
+    for ok, label, fix in checks:
+        print(f"{'✅' if ok else '❌'} {label}" + ("" if ok else f"\n   fix: {fix}"))
+        failed += 0 if ok else 1
+    return 1 if failed else 0
+
+
+def _systemctl(*args):
+    return subprocess.run(["systemctl", "--user", *args, "voice-typed",
+                           "--no-pager"]).returncode
+
+
+def cli(argv=None):
+    import argparse
+    ap = argparse.ArgumentParser(prog="voice-typed")
+    ap.add_argument("command", nargs="?", default="run",
+                    choices=["run", "status", "restart", "stop", "logs", "doctor"])
+    ns = ap.parse_args(argv)
+    if ns.command == "run":
+        main()
+        return 0
+    if ns.command in ("status", "restart", "stop"):
+        return _systemctl(ns.command)
+    if ns.command == "logs":
+        return subprocess.run(
+            ["journalctl", "--user", "-u", "voice-typed", "-n", "50", "--no-pager"]
+        ).returncode
+    if ns.command == "doctor":
+        return doctor()
+    return 2
+
+
 if __name__ == "__main__":
-    main()
+    sys.exit(cli())
