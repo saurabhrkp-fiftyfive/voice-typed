@@ -745,3 +745,26 @@ def test_resolve_user_paths_prefers_xdg(tmp_path, monkeypatch):
     vt.resolve_user_paths()
     assert vt.VOCAB_PATH == cfg_d / "vocab.txt"
     assert vt.CORRECTIONS_PATH == legacy_corrections   # no XDG file -> legacy stays
+
+
+def test_enhance_model_comes_from_config_toml(wav_file, secrets_file, tmp_path, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    p = tmp_path / "config.toml"
+    p.write_text('[engines]\nenhance_model = "my-model"\n')
+    monkeypatch.setattr(vt, "CONFIG_PATH", p)
+    r = mock.Mock(); r.raise_for_status.return_value = None
+    r.json.return_value = {"choices": [{"message": {"content": "out"}}]}
+    with mock.patch.object(vt.requests, "post", return_value=r) as post:
+        vt.enhance_prompt("hi")
+        assert post.call_args.kwargs["json"]["model"] == "my-model"
+
+
+def test_inject_paste_mode_from_config(tmp_path, monkeypatch):
+    p = tmp_path / "config.toml"
+    p.write_text("[behavior]\npaste_mode = true\n")
+    monkeypatch.setattr(vt, "CONFIG_PATH", p)
+    monkeypatch.delenv("VOICE_TYPED_PASTE", raising=False)
+    with mock.patch.object(vt.subprocess, "run") as run:
+        with mock.patch.object(vt, "paste_chord", return_value="ctrl+v"):
+            vt.inject("hello")
+        assert run.call_args_list[0].args[0][:2] == ["xclip", "-selection"]

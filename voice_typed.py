@@ -326,7 +326,7 @@ def enhance_prompt(text, mode="task", timeout=API_TIMEOUT_S, image_path=None):
             "\n\nPreserve the EXACT spelling of any of these names/terms that appear: "
             + vocab.replace("Vocabulary: ", "", 1)
         )
-    model = os.environ.get("VOICE_TYPED_ENHANCE_MODEL", "gpt-4o-mini")
+    model = load_config()["engines"]["enhance_model"]
     engines = [
         (OPENAI_CHAT_URL, secrets.get("OPENAI_API_KEY"), model),
         (GROQ_CHAT_URL, secrets.get("GROQ_API_KEY"), GROQ_ENHANCE_MODEL),
@@ -359,7 +359,7 @@ def transliterate(text, timeout=API_TIMEOUT_S):
     except OSError as e:
         print(f"voice-typed: transliterate skipped (secrets): {e}", flush=True)
         return text
-    model = os.environ.get("VOICE_TYPED_ENHANCE_MODEL", "gpt-4o-mini")
+    model = load_config()["engines"]["enhance_model"]
     engines = [
         (OPENAI_CHAT_URL, secrets.get("OPENAI_API_KEY"), model),
         (GROQ_CHAT_URL, secrets.get("GROQ_API_KEY"), GROQ_ENHANCE_MODEL),
@@ -407,7 +407,7 @@ def paste_chord():
 def inject(text, force_paste=False):
     if not text or not text.strip():
         return
-    if force_paste or os.environ.get("VOICE_TYPED_PASTE") == "1":
+    if force_paste or load_config()["behavior"]["paste_mode"]:
         subprocess.run(
             ["xclip", "-selection", "clipboard"],
             input=text.encode(), check=True, timeout=10,
@@ -573,7 +573,8 @@ def handle_utterance(wav_path, window_id, enhance="", shot_path=None):
         if not text:
             return  # silence -> type nothing
         text = apply_corrections(text)
-        text = transliterate(text)  # Devanagari -> Roman Hindi; no-op for Latin text
+        if load_config()["behavior"]["transliterate_devanagari"]:
+            text = transliterate(text)  # Devanagari -> Roman Hindi; no-op for Latin text
         print(
             f"voice-typed: utterance enhance={enhance} text={text[:60]!r}",
             flush=True,
@@ -671,26 +672,20 @@ def main():
 
     migrate_user_files()
     resolve_user_paths()
-    keyname = os.environ.get("VOICE_TYPED_KEY", "KEY_F9")
-    keycode = getattr(ecodes, keyname, None)
-    if keycode is None:
-        sys.exit(f"unknown VOICE_TYPED_KEY: {keyname}")
-    flagname = os.environ.get("VOICE_TYPED_FLAG_KEY", "KEY_F10")
-    flagcode = getattr(ecodes, flagname, None)
-    if flagcode is None:
-        sys.exit(f"unknown VOICE_TYPED_FLAG_KEY: {flagname}")
-    enhname = os.environ.get("VOICE_TYPED_ENHANCE_KEY", "KEY_F8")
-    enhcode = getattr(ecodes, enhname, None)
-    if enhcode is None:
-        sys.exit(f"unknown VOICE_TYPED_ENHANCE_KEY: {enhname}")
-    folname = os.environ.get("VOICE_TYPED_FOLLOWUP_KEY", "KEY_F7")
-    folcode = getattr(ecodes, folname, None)
-    if folcode is None:
-        sys.exit(f"unknown VOICE_TYPED_FOLLOWUP_KEY: {folname}")
-    msgname = os.environ.get("VOICE_TYPED_MSG_KEY", "KEY_F6")
-    msgcode = getattr(ecodes, msgname, None)
-    if msgcode is None:
-        sys.exit(f"unknown VOICE_TYPED_MSG_KEY: {msgname}")
+    cfg = load_config()
+    names = {}
+    codes = {}
+    for action in ("dictate", "enhance", "followup", "message", "flag"):
+        names[action] = cfg["keys"][action]
+        codes[action] = getattr(ecodes, names[action], None)
+        if codes[action] is None:
+            sys.exit(f"unknown key for {action}: {names[action]}")
+    keyname, keycode = names["dictate"], codes["dictate"]
+    flagname, flagcode = names["flag"], codes["flag"]
+    enhname, enhcode = names["enhance"], codes["enhance"]
+    folname, folcode = names["followup"], codes["followup"]
+    msgname, msgcode = names["message"], codes["message"]
+    max_utt = cfg["behavior"]["max_utterance_s"]
 
     def mode_for(code):
         return mode_for_code(code, enhcode, folcode, msgcode)
@@ -703,7 +698,7 @@ def main():
     run_dir = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "voice-typed"
     q = queue.Queue()
     threading.Thread(target=stt_worker, args=(q,), daemon=True).start()
-    if os.environ.get("VOICE_TYPED_GRAB", "1") != "0":
+    if cfg["behavior"]["grab_keys"]:
         threading.Thread(target=x11_grab_key, args=(enhname,), daemon=True).start()
         threading.Thread(target=x11_grab_key, args=(folname,), daemon=True).start()
         threading.Thread(target=x11_grab_key, args=(msgname,), daemon=True).start()
@@ -740,11 +735,11 @@ def main():
             if rec.poll() is not None:  # recorder died mid-recording
                 notify(f"recorder died (exit {rec.returncode})")
                 rec = None
-            elif time.monotonic() >= deadline:  # MAX_UTTERANCE_S cap
+            elif time.monotonic() >= deadline:  # max_utterance_s cap
                 stop_recording(rec)
                 rec = None
                 awaiting_release = True
-                notify(f"{MAX_UTTERANCE_S}s cap — transcribing")
+                notify(f"{max_utt}s cap — transcribing")
                 q.put((wav, active_window(), mode_for(rec_key), shot))
 
         for d in r:
@@ -780,7 +775,7 @@ def main():
                         shot = capture_active_window(
                             run_dir / f"shot-{int(time.time() * 1000)}.png"
                         )
-                    deadline = time.monotonic() + MAX_UTTERANCE_S
+                    deadline = time.monotonic() + max_utt
                     print(
                         f"voice-typed: keydown code={ev.code} mode={mode_for(ev.code)!r}",
                         flush=True,
