@@ -1,1 +1,364 @@
-<!doctype html><title>voice-typed config</title><p>voice-typed panel placeholder</p>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>voice-typed config</title>
+<style>
+  :root { --bg:#f5f6f6; --card:#fff; --ink:#1c2426; --soft:#5b6a6d; --line:#d8dede;
+          --acc:#0e7569; --accbg:#0e75691a; --warn:#c94747; --ok:#0e7569;
+          font-family: system-ui, sans-serif; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#141a1a; --card:#1b2424; --ink:#e5ecea; --soft:#9fb0ae;
+            --line:#2c3838; --acc:#3fb8a9; --accbg:#3fb8a922; --warn:#e06c6c; --ok:#3fb8a9; }
+  }
+  body { background:var(--bg); color:var(--ink); margin:0; padding:1.5rem;
+         display:flex; justify-content:center; }
+  main { width:100%; max-width:760px; }
+  h1 { font-size:1.2rem; font-family:ui-monospace,monospace; }
+  h3 { font-size:.95rem; color:var(--soft); }
+  nav { display:flex; gap:.25rem; border-bottom:1px solid var(--line); margin-bottom:1rem;
+        flex-wrap:wrap; }
+  nav button { border:0; background:none; color:var(--soft); padding:.5rem .9rem;
+               font-size:.95rem; cursor:pointer; border-bottom:2px solid transparent; }
+  nav button.on { color:var(--acc); border-bottom-color:var(--acc); font-weight:600; }
+  section { display:none; background:var(--card); border:1px solid var(--line);
+            border-radius:8px; padding:1.25rem; }
+  section.on { display:block; }
+  .row { display:flex; align-items:center; gap:.8rem; padding:.6rem 0;
+         border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  .row:last-child { border-bottom:0; }
+  .row .grow { flex:1; min-width:12rem; }
+  .row small { display:block; color:var(--soft); }
+  kbd { border:1px solid var(--line); border-bottom-width:3px; border-radius:5px;
+        padding:.25rem .5rem; font-family:ui-monospace,monospace; font-size:.85rem;
+        background:var(--bg); }
+  button, input, textarea { font:inherit; color:inherit; }
+  .btn { border:1px solid var(--line); background:var(--card); border-radius:6px;
+         padding:.35rem .8rem; cursor:pointer; }
+  .btn.acc { background:var(--acc); border-color:var(--acc); color:#fff; }
+  .btn.capturing { border:1.5px dashed var(--warn); color:var(--warn); }
+  .btn:disabled { opacity:.5; cursor:default; }
+  input[type=text], input[type=password], input[type=number], textarea {
+    background:var(--bg); border:1px solid var(--line); border-radius:6px;
+    padding:.4rem .6rem; }
+  textarea { width:100%; min-height:10rem; box-sizing:border-box;
+             font-family:ui-monospace,monospace; }
+  .bar { height:.5rem; background:var(--line); border-radius:4px; overflow:hidden;
+         margin:.5rem 0; }
+  .bar div { height:100%; background:var(--acc); width:0; }
+  .bar.over div { background:var(--warn); }
+  .badge { padding:.15rem .6rem; border-radius:999px; font-size:.8rem; font-weight:600; }
+  .badge.up { background:var(--accbg); color:var(--ok); }
+  .badge.down { background:#c9474722; color:var(--warn); }
+  pre { background:var(--bg); border:1px solid var(--line); border-radius:6px;
+        padding:.75rem; overflow-x:auto; font-size:.78rem; }
+  .msg { position:fixed; bottom:1rem; left:50%; transform:translateX(-50%);
+         background:var(--ink); color:var(--bg); padding:.5rem 1rem; border-radius:6px;
+         opacity:0; transition:opacity .2s; pointer-events:none; }
+  .msg.show { opacity:1; }
+  .flag { border:1px solid var(--line); border-radius:6px; padding:.6rem .8rem;
+          margin-bottom:.6rem; }
+  .flag q { color:var(--soft); }
+  .flag .acts { display:flex; gap:.5rem; margin-top:.5rem; flex-wrap:wrap; }
+</style>
+</head>
+<body>
+<main>
+  <h1>voice-typed config</h1>
+  <nav id="nav"></nav>
+
+  <section data-tab="Shortcuts">
+    <div id="shortcut-rows"></div>
+    <p><small>Bindable: F1–F10, letters, digits. F11/F12 belong to the browser and
+      can't be captured here.</small></p>
+    <div class="row"><span class="grow" id="shortcut-warn" style="color:var(--warn)"></span>
+      <button class="btn acc" id="save-shortcuts">Save</button>
+      <button class="btn" id="restart-1" hidden>Restart daemon</button></div>
+  </section>
+
+  <section data-tab="Corrections">
+    <h3>Flagged inbox</h3>
+    <div id="flag-list"><small>nothing flagged</small></div>
+    <h3>Active corrections</h3>
+    <div id="corr-rows"></div>
+    <button class="btn" id="corr-add">+ add</button>
+    <div class="row"><input type="text" class="grow" id="corr-preview-in"
+        placeholder="try a sentence — corrections applied live">
+      <span class="grow" id="corr-preview-out"></span></div>
+    <div class="row"><span class="grow"></span>
+      <button class="btn acc" id="save-corr">Save</button></div>
+  </section>
+
+  <section data-tab="Vocabulary">
+    <p><small>One term per line. Sent to the transcriber as a spelling bias.</small></p>
+    <textarea id="vocab"></textarea>
+    <div class="bar" id="vocab-bar"><div></div></div>
+    <div class="row"><span class="grow" id="vocab-count"></span>
+      <button class="btn acc" id="save-vocab">Save</button></div>
+  </section>
+
+  <section data-tab="Engines">
+    <div class="row"><span class="grow">OpenAI API key<small id="openai-set"></small></span>
+      <input type="password" id="key-openai" placeholder="leave empty to keep"></div>
+    <div class="row"><span class="grow">Groq API key<small id="groq-set"></small></span>
+      <input type="password" id="key-groq" placeholder="leave empty to keep"></div>
+    <div class="row"><span class="grow">Enhance model</span>
+      <input type="text" id="enhance-model"></div>
+    <div class="row"><span class="grow">API timeout (s)</span>
+      <input type="number" id="timeout" min="1" style="width:6rem"></div>
+    <div class="row"><span class="grow">Always paste (never type)</span>
+      <input type="checkbox" id="paste-mode"></div>
+    <div class="row"><span class="grow">Grab enhance keys at X11 level</span>
+      <input type="checkbox" id="grab-keys"></div>
+    <div class="row"><span class="grow">Romanize Hindi (Devanagari → Hinglish)</span>
+      <input type="checkbox" id="translit"></div>
+    <div class="row"><span class="grow"></span>
+      <button class="btn acc" id="save-engines">Save</button>
+      <button class="btn" id="restart-2" hidden>Restart daemon</button></div>
+  </section>
+
+  <section data-tab="Service">
+    <div class="row"><span class="grow">Daemon</span><span class="badge" id="svc-badge"></span>
+      <button class="btn" data-svc="start">Start</button>
+      <button class="btn" data-svc="stop">Stop</button>
+      <button class="btn" data-svc="restart">Restart</button></div>
+    <pre id="svc-log"></pre>
+    <p><small>Test it: focus any text field, hold F9, speak, release.</small></p>
+  </section>
+
+  <div class="msg" id="msg"></div>
+</main>
+<script>
+const TOKEN = new URLSearchParams(location.search).get("token") || "";
+const ACTIONS = [
+  ["dictate",  "Dictate (verbatim)",  "hold to talk, types transcript as-is"],
+  ["enhance",  "Enhance (new task)",  "rewrites ramble into a structured prompt"],
+  ["followup", "Follow-up",           "continuation message, + screenshot grounding"],
+  ["message",  "Chat message",        "DM/chat reply, + screenshot grounding"],
+  ["flag",     "Flag last",           "log last transcript as mistranscribed"],
+];
+let state = null;          // /api/state payload
+let keys = {};             // working copy of state.config.keys
+let corrections = [];      // working copy [[wrong, right]...]
+
+const $ = (s) => document.querySelector(s);
+const el = (tag, attrs = {}, ...kids) => {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "onclick") n.onclick = v; else n.setAttribute(k, v);
+  }
+  n.append(...kids);
+  return n;
+};
+
+async function api(path, body) {
+  const r = await fetch(path, {
+    method: body ? "POST" : "GET",
+    headers: { "X-Config-Token": TOKEN, "Content-Type": "application/json" },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || r.status);
+  return data;
+}
+function toast(text) {
+  const m = $("#msg");
+  m.textContent = text;
+  m.classList.add("show");
+  setTimeout(() => m.classList.remove("show"), 2500);
+}
+
+/* ── tabs ── */
+const tabs = [...document.querySelectorAll("section")].map((s) => s.dataset.tab);
+for (const name of tabs) {
+  $("#nav").append(el("button", {
+    onclick: () => {
+      document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("on", b.textContent === name));
+      document.querySelectorAll("section").forEach((s) => s.classList.toggle("on", s.dataset.tab === name));
+    },
+  }, name));
+}
+
+/* ── shortcuts ── */
+const CODE_MAP = (code) => {
+  let m;
+  if ((m = code.match(/^F([1-9]|10)$/))) return "KEY_F" + m[1];
+  if ((m = code.match(/^Key([A-Z])$/))) return "KEY_" + m[1];
+  if ((m = code.match(/^Digit([0-9])$/))) return "KEY_" + m[1];
+  return null;
+};
+function renderShortcuts() {
+  const box = $("#shortcut-rows");
+  box.replaceChildren();
+  const seen = Object.values(keys);
+  const dupes = seen.filter((k, i) => seen.indexOf(k) !== i);
+  $("#shortcut-warn").textContent = dupes.length ? "conflict: " + dupes.join(", ") : "";
+  $("#save-shortcuts").disabled = dupes.length > 0;
+  for (const [action, label, hint] of ACTIONS) {
+    const btn = el("button", { class: "btn" }, "Rebind");
+    btn.onclick = () => {
+      btn.textContent = "Press a key…";
+      btn.classList.add("capturing");
+      const grab = (ev) => {
+        ev.preventDefault();
+        const name = CODE_MAP(ev.code);
+        window.removeEventListener("keydown", grab, true);
+        btn.classList.remove("capturing");
+        btn.textContent = "Rebind";
+        if (!name) { toast(ev.code + " not bindable (F1–F10, letters, digits)"); return; }
+        keys[action] = name;
+        renderShortcuts();
+      };
+      window.addEventListener("keydown", grab, true);
+    };
+    box.append(el("div", { class: "row" },
+      el("span", { class: "grow" }, label, el("small", {}, hint)),
+      el("kbd", {}, keys[action].replace("KEY_", "")), btn));
+  }
+}
+$("#save-shortcuts").onclick = async () => {
+  const r = await api("/api/config", { keys }).catch((e) => toast("save failed: " + e.message));
+  if (r) { toast("saved"); $("#restart-1").hidden = !r.restart_required; }
+};
+
+/* ── corrections ── */
+function renderCorrections() {
+  const box = $("#corr-rows");
+  box.replaceChildren();
+  corrections.forEach((pair, i) => {
+    const wrong = el("input", { type: "text", value: pair[0], placeholder: "wrong" });
+    const right = el("input", { type: "text", value: pair[1], placeholder: "right" });
+    wrong.oninput = () => { pair[0] = wrong.value; preview(); };
+    right.oninput = () => { pair[1] = right.value; preview(); };
+    box.append(el("div", { class: "row" }, wrong, el("span", {}, "→"), right,
+      el("button", { class: "btn", onclick: () => { corrections.splice(i, 1); renderCorrections(); } }, "✕")));
+  });
+  preview();
+}
+function preview() {
+  let text = $("#corr-preview-in").value;
+  for (const [w, r] of corrections) {
+    if (!w.trim()) continue;
+    text = text.replace(new RegExp("\\b" + w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "gi"), r);
+  }
+  $("#corr-preview-out").textContent = text;
+}
+$("#corr-preview-in").oninput = preview;
+$("#corr-add").onclick = () => { corrections.push(["", ""]); renderCorrections(); };
+$("#save-corr").onclick = async () => {
+  const clean = corrections.filter(([w]) => w.trim());
+  await api("/api/words", { corrections: clean }).then(() => toast("saved"))
+    .catch((e) => toast("save failed: " + e.message));
+};
+function renderFlagged() {
+  const box = $("#flag-list");
+  if (!state.flagged.length) { box.replaceChildren(el("small", {}, "nothing flagged")); return; }
+  box.replaceChildren();
+  for (const f of state.flagged) {
+    const right = el("input", { type: "text", value: f.note, placeholder: "correct form" });
+    const archive = async (extra) => {
+      if (extra) await api("/api/words", extra);
+      await api("/api/words", { archive_flagged: [f.ts] });
+      state = await api("/api/state");
+      corrections = state.corrections;
+      renderFlagged(); renderCorrections();
+    };
+    box.append(el("div", { class: "flag" },
+      el("q", {}, f.text), el("small", {}, " — " + f.ts),
+      el("div", { class: "acts" }, right,
+        el("button", { class: "btn", onclick: () => {
+          if (!right.value.trim()) { toast("enter the correct form first"); return; }
+          archive({ corrections: [...corrections.filter(([w]) => w.trim()), [f.text, right.value]] })
+            .then(() => toast("promoted to corrections")).catch((e) => toast(e.message));
+        } }, "Promote"),
+        el("button", { class: "btn", onclick: () => {
+          const term = right.value.trim() || f.text;
+          archive({ vocab: state.vocab.replace(/\n?$/, "\n") + term + "\n" })
+            .then(() => toast("added to vocabulary")).catch((e) => toast(e.message));
+        } }, "Add to vocab"),
+        el("button", { class: "btn", onclick: () =>
+          archive().then(() => toast("dismissed")).catch((e) => toast(e.message)) }, "Dismiss"))));
+  }
+}
+
+/* ── vocabulary ── */
+function vocabBudget() {
+  const words = $("#vocab").value.split("\n").map((w) => w.trim())
+    .filter((w) => w && !w.startsWith("#"));
+  const used = words.length ? ("Vocabulary: " + words.join(", ")).length : 0;
+  const max = state.budget.max;
+  $("#vocab-bar").firstElementChild.style.width = Math.min(100, used / max * 100) + "%";
+  $("#vocab-bar").classList.toggle("over", used > max);
+  $("#vocab-count").textContent = used + " / " + max + " chars" +
+    (used > max ? " — over budget, tail will be truncated" : "");
+}
+$("#vocab").oninput = vocabBudget;
+$("#save-vocab").onclick = () =>
+  api("/api/words", { vocab: $("#vocab").value }).then(() => toast("saved"))
+    .catch((e) => toast("save failed: " + e.message));
+
+/* ── engines ── */
+$("#save-engines").onclick = async () => {
+  try {
+    const keysBody = {};
+    if ($("#key-openai").value) keysBody.OPENAI_API_KEY = $("#key-openai").value;
+    if ($("#key-groq").value) keysBody.GROQ_API_KEY = $("#key-groq").value;
+    if (Object.keys(keysBody).length) {
+      await api("/api/keys", keysBody);
+      $("#key-openai").value = ""; $("#key-groq").value = "";
+    }
+    const r = await api("/api/config", {
+      engines: { enhance_model: $("#enhance-model").value,
+                 api_timeout_s: Number($("#timeout").value) },
+      behavior: { paste_mode: $("#paste-mode").checked,
+                  grab_keys: $("#grab-keys").checked,
+                  transliterate_devanagari: $("#translit").checked },
+    });
+    toast("saved");
+    $("#restart-2").hidden = !r.restart_required;
+  } catch (e) { toast("save failed: " + e.message); }
+};
+
+/* ── service ── */
+function renderService() {
+  const b = $("#svc-badge");
+  b.textContent = state.service.active ? "active" : "stopped";
+  b.className = "badge " + (state.service.active ? "up" : "down");
+  $("#svc-log").textContent = state.service.log;
+}
+document.querySelectorAll("[data-svc]").forEach((btn) => {
+  btn.onclick = async () => {
+    const r = await api("/api/service", { action: btn.dataset.svc })
+      .catch((e) => toast(e.message));
+    if (r) { toast(r.ok ? btn.dataset.svc + " ok" : "failed: " + r.detail); refresh(); }
+  };
+});
+for (const id of ["restart-1", "restart-2"]) {
+  $("#" + id).onclick = async () => {
+    await api("/api/service", { action: "restart" }).catch((e) => toast(e.message));
+    $("#" + id).hidden = true;
+    toast("daemon restarted");
+  };
+}
+
+/* ── boot ── */
+async function refresh() {
+  state = await api("/api/state");
+  keys = { ...state.config.keys };
+  corrections = state.corrections;
+  $("#vocab").value = state.vocab;
+  $("#enhance-model").value = state.config.engines.enhance_model;
+  $("#timeout").value = state.config.engines.api_timeout_s;
+  $("#paste-mode").checked = state.config.behavior.paste_mode;
+  $("#grab-keys").checked = state.config.behavior.grab_keys;
+  $("#translit").checked = state.config.behavior.transliterate_devanagari;
+  $("#openai-set").textContent = state.keys_set.OPENAI_API_KEY ? "configured" : "not set";
+  $("#groq-set").textContent = state.keys_set.GROQ_API_KEY ? "configured" : "not set";
+  renderShortcuts(); renderCorrections(); renderFlagged(); vocabBudget(); renderService();
+}
+refresh().then(() => document.querySelector("nav button").click())
+  .catch((e) => { document.body.textContent = "cannot load state: " + e.message; });
+</script>
+</body>
+</html>
