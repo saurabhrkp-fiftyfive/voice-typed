@@ -67,6 +67,16 @@ GROUNDING_LINE = (
     "names, the topic, who is being replied to. Never add facts from the screenshot "
     "that the speaker did not reference."
 )
+TRANSLITERATE_SYSTEM = """\
+You transliterate Hindi (Devanagari) text into the Latin/Roman alphabet.
+
+Rules:
+- Romanize any Devanagari (Hindi) into natural, phonetic Roman Hindi — the way Hindi is typed in Latin script in everyday chat (e.g. "क्या हाल है" -> "kya haal hai", "मैं ठीक हूँ" -> "main theek hoon"). Delete the implicit trailing schwa ("प्यार" -> "pyaar", not "pyaara").
+- Keep the meaning and word order EXACTLY the same. Do NOT translate to English, summarize, correct, or add/remove anything.
+- Leave text already in Latin script, numbers, punctuation, code, and English words unchanged and in place.
+- Output ONLY the transliterated text on one line. No preamble, no commentary, no quotes, no code fences.
+"""
+DEVANAGARI_RE = re.compile(r"[ऀ-ॿ]")
 SECRETS_PATH = Path.home() / ".config" / "secrets.env"
 VOCAB_PATH = Path(__file__).resolve().parent / "vocab.txt"
 VOCAB_MAX_CHARS = 800  # ~200 tokens; whisper prompt cap is 224 tokens
@@ -229,6 +239,31 @@ def enhance_prompt(text, mode="task", timeout=API_TIMEOUT_S, image_path=None):
         except Exception as e:  # noqa: BLE001 — any engine error -> next engine
             last_err = e
     raise EnhanceError(f"all engines failed: {last_err}")
+
+
+def transliterate(text, timeout=API_TIMEOUT_S):
+    """Romanize Devanagari (Hindi) in `text` to Latin script. No Devanagari ->
+    return unchanged. On any failure -> return original text (never lose it)."""
+    if not DEVANAGARI_RE.search(text):
+        return text
+    try:
+        secrets = load_secrets()
+    except OSError as e:
+        print(f"voice-typed: transliterate skipped (secrets): {e}", flush=True)
+        return text
+    model = os.environ.get("VOICE_TYPED_ENHANCE_MODEL", "gpt-4o-mini")
+    engines = [
+        (OPENAI_CHAT_URL, secrets.get("OPENAI_API_KEY"), model),
+        (GROQ_CHAT_URL, secrets.get("GROQ_API_KEY"), GROQ_ENHANCE_MODEL),
+    ]
+    for url, key, m in [(u, k, mm) for u, k, mm in engines if k]:
+        try:
+            out = _chat_request(url, key, m, text, timeout, TRANSLITERATE_SYSTEM)
+            if out and not DEVANAGARI_RE.search(out):
+                return out
+        except Exception as e:  # noqa: BLE001 — any engine error -> next engine
+            print(f"voice-typed: transliterate engine failed: {e}", flush=True)
+    return text
 
 
 # terminals paste with ctrl+shift+v (ctrl+v is verbatim-insert / image paste there)
@@ -430,6 +465,7 @@ def handle_utterance(wav_path, window_id, enhance="", shot_path=None):
         if not text:
             return  # silence -> type nothing
         text = apply_corrections(text)
+        text = transliterate(text)  # Devanagari -> Roman Hindi; no-op for Latin text
         print(
             f"voice-typed: utterance enhance={enhance} text={text[:60]!r}",
             flush=True,

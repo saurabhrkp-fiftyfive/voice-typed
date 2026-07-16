@@ -42,6 +42,12 @@ WAV (16 kHz mono, pw-record)
   runs. If all fail → notify + skip (nothing typed).
 - **vocab bias:** `vocab.txt` (domain words / names) is sent as the STT `prompt`
   parameter to bias spelling. Hot-reloaded per utterance, capped ~800 chars.
+- **Hindi -> Roman (all modes):** after transcription, any Devanagari in the
+  text is transliterated to natural Roman Hindi (Hinglish) via the enhance chat
+  model — e.g. `क्या हाल है` -> `kya haal hai`. Gated on a Devanagari check, so
+  English-only dictation makes no extra call. Latin text, numbers, code, and
+  English words pass through unchanged; on any API failure the original text is
+  kept. Runs before enhance, so F6/F7/F8 also get Roman input.
 
 ### 2. Prompt/message enhance (F6, F7, F8 only)
 
