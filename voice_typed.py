@@ -63,6 +63,18 @@ Rules:
 - Output the whole message on ONE physical line — no newline characters anywhere.
 - Output ONLY the message. No preamble, no commentary, no code fences.
 """
+POLISH_SYSTEM = """\
+You lightly clean up raw dictated speech so it reads as well-written text.
+
+Rules:
+- Fix grammar, punctuation, and word order; smooth awkward phrasing into natural fluent sentences.
+- Remove filler words ("um", "you know", "like"), false starts, and verbatim repetition.
+- Keep the speaker's meaning, tone, intent, and level of formality EXACTLY — this is the speaker's own text, not a summary or a rewrite into another format.
+- Never add, drop, or reorder content; never answer questions in the text; never add labels, headings, or commentary.
+- Keep names, numbers, technical terms, and code exactly as spoken.
+- Output the whole text on ONE physical line — no newline characters anywhere.
+- Output ONLY the cleaned-up text. No preamble, no commentary, no quotes, no code fences.
+"""
 GROUNDING_LINE = (
     "A screenshot of the current screen is attached for context. Use it ONLY to "
     "ground references in the dictation — visible output, error messages, filenames, "
@@ -103,6 +115,7 @@ DEFAULT_CONFIG = {
     "behavior": {
         "paste_mode": False, "grab_keys": True,
         "max_utterance_s": 300, "transliterate_devanagari": True,
+        "polish_dictation": False,
     },
 }
 _ENV_OVERRIDES = {
@@ -318,7 +331,8 @@ def enhance_prompt(text, mode="task", timeout=API_TIMEOUT_S, image_path=None):
         secrets = load_secrets()
     except OSError as e:
         raise EnhanceError(f"cannot read secrets: {e}") from e
-    system = {"message": MSG_SYSTEM, "followup": FOLLOWUP_SYSTEM}.get(mode, ENHANCE_SYSTEM)
+    system = {"message": MSG_SYSTEM, "followup": FOLLOWUP_SYSTEM,
+              "polish": POLISH_SYSTEM}.get(mode, ENHANCE_SYSTEM)
     image_b64 = None
     if image_path:
         try:
@@ -614,6 +628,14 @@ def handle_utterance(wav_path, window_id, enhance="", shot_path=None):
             except EnhanceError as e:
                 notify(f"enhance failed — raw text: {e}")
                 print(f"voice-typed: enhance FAILED: {e}", flush=True)
+        elif load_config()["behavior"]["polish_dictation"]:
+            try:
+                text = enhance_prompt(text, "polish")
+                text = apply_corrections(text)  # LLM may re-spell; re-normalize known terms
+                print(f"voice-typed: polished -> {text[:60]!r}", flush=True)
+            except EnhanceError as e:
+                notify(f"polish failed — raw text: {e}")
+                print(f"voice-typed: polish FAILED: {e}", flush=True)
         global LAST_TEXT
         LAST_TEXT = text
         if window_id is not None:

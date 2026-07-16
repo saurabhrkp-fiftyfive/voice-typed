@@ -405,6 +405,60 @@ def test_enhance_prompt_followup_uses_followup_system(secrets_file, monkeypatch)
         assert post.call_args.kwargs["json"]["messages"][0]["content"].startswith(vt.FOLLOWUP_SYSTEM)
 
 
+def test_enhance_prompt_polish_uses_polish_system(secrets_file, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    with mock.patch.object(vt.requests, "post", return_value=_chat_resp()) as post:
+        vt.enhance_prompt("x", "polish")
+        assert post.call_args.kwargs["json"]["messages"][0]["content"].startswith(vt.POLISH_SYSTEM)
+
+
+def _polish_cfg(tmp_path, monkeypatch, value):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(f"[behavior]\npolish_dictation = {value}\n")
+    monkeypatch.setattr(vt, "CONFIG_PATH", cfg)
+
+
+def test_handle_utterance_polish_dictation_rewrites(wav_file, tmp_path, monkeypatch):
+    _polish_cfg(tmp_path, monkeypatch, "true")
+    monkeypatch.setattr(vt, "transcribe", lambda p: "i has went office")
+    seen = []
+    def fake_enhance(t, mode="task", image_path=None):
+        seen.append((t, mode, image_path))
+        return "I went to the office."
+    monkeypatch.setattr(vt, "enhance_prompt", fake_enhance)
+    calls = []
+    monkeypatch.setattr(vt, "inject", lambda t, force_paste=False: calls.append((t, force_paste)))
+    vt.handle_utterance(wav_file, None)
+    assert seen == [("i has went office", "polish", None)]
+    assert calls == [("I went to the office.", False)]   # typed, not pasted
+
+
+def test_handle_utterance_polish_failure_types_raw(wav_file, tmp_path, monkeypatch):
+    _polish_cfg(tmp_path, monkeypatch, "true")
+    monkeypatch.setattr(vt, "transcribe", lambda p: "raw words")
+    def boom(t, mode="task", image_path=None):
+        raise vt.EnhanceError("down")
+    monkeypatch.setattr(vt, "enhance_prompt", boom)
+    calls = []
+    monkeypatch.setattr(vt, "inject", lambda t, force_paste=False: calls.append((t, force_paste)))
+    notes = []
+    monkeypatch.setattr(vt, "notify", notes.append)
+    vt.handle_utterance(wav_file, None)
+    assert calls == [("raw words", False)]
+    assert any("polish failed" in n for n in notes)
+
+
+def test_handle_utterance_polish_off_stays_verbatim(wav_file, tmp_path, monkeypatch):
+    _polish_cfg(tmp_path, monkeypatch, "false")
+    monkeypatch.setattr(vt, "transcribe", lambda p: "verbatim words")
+    monkeypatch.setattr(vt, "enhance_prompt",
+                        lambda *a, **k: pytest.fail("must not call enhance"))
+    calls = []
+    monkeypatch.setattr(vt, "inject", lambda t, force_paste=False: calls.append(t))
+    vt.handle_utterance(wav_file, None)
+    assert calls == ["verbatim words"]
+
+
 def test_inject_force_paste_overrides_type(monkeypatch):
     monkeypatch.delenv("VOICE_TYPED_PASTE", raising=False)
     monkeypatch.setattr(vt, "active_window_class", lambda: "obsidian")

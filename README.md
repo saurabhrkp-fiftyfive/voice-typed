@@ -14,7 +14,7 @@ recorded only while a key is held, transcribed once, then deleted.
 
 | Key | Env var | Mode | LLM rewrite | Screenshot | System prompt |
 |-----|---------|------|-------------|-----------|---------------|
-| **F9** | `VOICE_TYPED_KEY` | verbatim | no | no | — (types transcript as-is) |
+| **F9** | `VOICE_TYPED_KEY` | verbatim | opt-in | no | types transcript as-is; `behavior.polish_dictation = true` adds a light grammar/phrasing cleanup (`POLISH_SYSTEM`) |
 | **F8** | `VOICE_TYPED_ENHANCE_KEY` | new-task enhance | yes | no | `ENHANCE_SYSTEM` — rewrites ramble into a structured coding-agent prompt |
 | **F7** | `VOICE_TYPED_FOLLOWUP_KEY` | follow-up enhance | yes | **yes** | `FOLLOWUP_SYSTEM` (+ grounding line) — continuation message for an active agent session |
 | **F6** | `VOICE_TYPED_MSG_KEY` | chat message | yes | **yes** | `MSG_SYSTEM` — natural chat/DM reply grounded in on-screen thread |
@@ -144,7 +144,13 @@ paste_mode = false
 grab_keys = true
 max_utterance_s = 300
 transliterate_devanagari = true
+polish_dictation = false   # F9: LLM grammar/phrasing cleanup instead of verbatim
 ```
+
+`polish_dictation = true` sends F9 dictation through a light LLM pass (the
+enhance chat model) that fixes grammar and smooths phrasing without changing
+meaning or adding content — unlike F8, it never restructures into a task
+prompt. On API failure the raw transcript is typed; text is never lost.
 
 Key-binding changes need `voice-typed restart`; everything else is picked up
 per utterance.

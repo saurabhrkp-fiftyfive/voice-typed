@@ -113,6 +113,8 @@
       <input type="checkbox" id="grab-keys"></div>
     <div class="row"><span class="grow">Romanize Hindi (Devanagari → Hinglish)</span>
       <input type="checkbox" id="translit"></div>
+    <div class="row"><span class="grow">Polish dictation (F9: LLM grammar cleanup)</span>
+      <input type="checkbox" id="polish"></div>
     <div class="row"><span class="grow"></span>
       <button class="btn acc" id="save-engines">Save</button>
       <button class="btn" id="restart-2" hidden>Restart daemon</button></div>
@@ -313,7 +315,8 @@ $("#save-engines").onclick = async () => {
                  api_timeout_s: Number($("#timeout").value) },
       behavior: { paste_mode: $("#paste-mode").checked,
                   grab_keys: $("#grab-keys").checked,
-                  transliterate_devanagari: $("#translit").checked },
+                  transliterate_devanagari: $("#translit").checked,
+                  polish_dictation: $("#polish").checked },
     });
     toast("saved");
     $("#restart-2").hidden = !r.restart_required;
@@ -353,6 +356,7 @@ async function refresh() {
   $("#paste-mode").checked = state.config.behavior.paste_mode;
   $("#grab-keys").checked = state.config.behavior.grab_keys;
   $("#translit").checked = state.config.behavior.transliterate_devanagari;
+  $("#polish").checked = state.config.behavior.polish_dictation;
   $("#openai-set").textContent = state.keys_set.OPENAI_API_KEY ? "configured" : "not set";
   $("#groq-set").textContent = state.keys_set.GROQ_API_KEY ? "configured" : "not set";
   renderShortcuts(); renderCorrections(); renderFlagged(); vocabBudget(); renderService();
