@@ -1,12 +1,28 @@
 # voice-typed
 
-Hold-to-talk voice dictation daemon for **X11 / GNOME**. Hold a key, speak,
+[![CI](https://github.com/saurabhrkp-fiftyfive/voice-typed/actions/workflows/ci.yml/badge.svg)](https://github.com/saurabhrkp-fiftyfive/voice-typed/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
+[![Platform: X11 / GNOME](https://img.shields.io/badge/platform-X11%20%2F%20GNOME-informational.svg)](#getting-started)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#)
+
+**Hold-to-talk voice dictation daemon for X11 / GNOME.** Hold a key, speak,
 release → your speech is transcribed (and optionally rewritten by an LLM,
 grounded in a screenshot of the active window) and typed into the focused
 window via `xdotool`.
 
 No always-on listening. No wake word. No standing transcript log. Audio is
 recorded only while a key is held, transcribed once, then deleted.
+
+## What gets typed
+
+![voice-typed output examples — F9 verbatim, F8 enhance, F6 chat](docs/assets/output-example.png)
+
+Same voice, three keys. **F9** types what you said, verbatim. **F8** rewrites a
+ramble into a structured task prompt. **F6** turns an aside into a chat reply,
+grounded in what's on screen. Every mode types straight into the focused window
+— editor, terminal, chat box, anywhere. Pick a key per [mode](#keys--modes),
+tune everything from the [config panel](#web-config-panel).
 
 ---
 
@@ -169,13 +185,27 @@ Runs a short-lived local web server and opens a five-tab panel:
 
 - **Shortcuts** — rebind any mode key by pressing it (F1–F10, A–Z, 0–9);
   conflicts are detected before save.
+
+  ![Shortcuts tab — rebind each mode key](docs/assets/settings-shortcuts.png)
+
 - **Corrections** — the F10 flag inbox: promote a bad transcript to a
   `wrong => right` pair, add words to vocabulary, or dismiss; edit the
   corrections table with a live preview.
+
+  ![Corrections tab — flag inbox and wrong => right pairs](docs/assets/settings-corrections.png)
+
 - **Vocabulary** — edit `vocab.txt` with a prompt-budget bar.
+
+  ![Vocabulary tab — word list with prompt-budget bar](docs/assets/settings-vocabulary.png)
+
 - **Engines** — API keys (write-only fields, never displayed back), enhance
   model, timeout, behavior toggles.
+
+  ![Engines tab — API keys, model, and behavior toggles](docs/assets/settings-engines.png)
+
 - **Service** — daemon status, start/stop/restart, recent log.
+
+  ![Service tab — daemon status, controls, and recent log](docs/assets/settings-service.png)
 
 Security: binds to `127.0.0.1` only; every request needs a per-session random
 token (in the URL it prints); Host/Origin are checked against loopback; the
