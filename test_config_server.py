@@ -109,3 +109,37 @@ def test_state_shape(server, user_files):
     assert st["budget"]["used"] == len("Vocabulary: Kubernetes, PostgreSQL")
     assert st["keys_set"] == {"OPENAI_API_KEY": True, "GROQ_API_KEY": False}
     assert "sk-supersecret" not in body.decode()   # key material never leaves server
+
+
+def test_post_config_writes_toml_and_flags_restart(server, user_files):
+    status, body = _req(server, "POST", "/api/config",
+                        body={"keys": {"dictate": "KEY_F5"}})
+    assert status == 200
+    assert json.loads(body) == {"ok": True, "restart_required": True}
+    assert vt.load_config()["keys"]["dictate"] == "KEY_F5"
+    assert vt.load_config()["keys"]["enhance"] == "KEY_F8"   # partial update
+
+
+def test_post_config_behavior_only_no_restart(server, user_files):
+    status, body = _req(server, "POST", "/api/config",
+                        body={"behavior": {"paste_mode": True}})
+    assert json.loads(body)["restart_required"] is False
+
+
+def test_post_config_rejects_unbindable_key(server, user_files):
+    status, body = _req(server, "POST", "/api/config",
+                        body={"keys": {"dictate": "KEY_F11"}})
+    assert status == 422
+    assert vt.load_config()["keys"]["dictate"] == "KEY_F9"   # nothing written
+
+
+def test_post_config_rejects_duplicate_keys(server, user_files):
+    status, _ = _req(server, "POST", "/api/config",
+                     body={"keys": {"dictate": "KEY_F8"}})   # collides with enhance
+    assert status == 422
+
+
+def test_post_config_rejects_bad_timeout(server, user_files):
+    status, _ = _req(server, "POST", "/api/config",
+                     body={"engines": {"api_timeout_s": -5}})
+    assert status == 422

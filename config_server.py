@@ -145,7 +145,28 @@ def api_state():
 
 
 def api_config(payload):
-    return 501, {"error": "not implemented"}
+    cfg = vt.load_config()
+    new = {sec: dict(vals) for sec, vals in cfg.items()}
+    for sec in ("keys", "engines", "behavior"):
+        for k, v in (payload.get(sec) or {}).items():
+            if k in new[sec]:
+                new[sec][k] = v
+    for action, name in new["keys"].items():
+        if name not in BINDABLE_KEYS:
+            return 422, {"error": f"key not bindable: {action}={name}"}
+    if len(set(new["keys"].values())) != len(new["keys"]):
+        return 422, {"error": "duplicate key binding"}
+    if not isinstance(new["engines"]["api_timeout_s"], int) \
+            or new["engines"]["api_timeout_s"] <= 0:
+        return 422, {"error": "bad api_timeout_s"}
+    if not isinstance(new["behavior"]["max_utterance_s"], int) \
+            or new["behavior"]["max_utterance_s"] <= 0:
+        return 422, {"error": "bad max_utterance_s"}
+    restart = (new["keys"] != cfg["keys"] or new["engines"] != cfg["engines"]
+               or new["behavior"]["grab_keys"] != cfg["behavior"]["grab_keys"])
+    vt.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    vt.CONFIG_PATH.write_text(vt.dump_config(new))
+    return 200, {"ok": True, "restart_required": restart}
 
 
 def api_words(payload):
