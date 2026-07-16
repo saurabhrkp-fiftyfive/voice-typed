@@ -646,3 +646,64 @@ def test_handle_utterance_reapplies_corrections_after_enhance(wav_file, tmp_path
     monkeypatch.setattr(vt, "inject", lambda t, force_paste=False: calls.append(t))
     vt.handle_utterance(wav_file, None, enhance="message")
     assert calls == ["call Linus now"]
+
+
+# ── config layer ─────────────────────────────────────────────
+
+
+def test_load_config_missing_file_returns_defaults(tmp_path):
+    cfg = vt.load_config(tmp_path / "none.toml")
+    assert cfg["keys"]["dictate"] == "KEY_F9"
+    assert cfg["keys"]["flag"] == "KEY_F10"
+    assert cfg["engines"]["enhance_model"] == "gpt-4o-mini"
+    assert cfg["behavior"]["paste_mode"] is False
+    assert cfg["behavior"]["grab_keys"] is True
+
+
+def test_load_config_partial_file_merges_over_defaults(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text('[keys]\ndictate = "KEY_F5"\n\n[behavior]\npaste_mode = true\n')
+    cfg = vt.load_config(p)
+    assert cfg["keys"]["dictate"] == "KEY_F5"
+    assert cfg["keys"]["enhance"] == "KEY_F8"          # untouched default
+    assert cfg["behavior"]["paste_mode"] is True
+    assert cfg["engines"]["api_timeout_s"] == 30
+
+
+def test_load_config_malformed_toml_falls_back_to_defaults(tmp_path, capsys):
+    p = tmp_path / "config.toml"
+    p.write_text("not [valid toml ===")
+    cfg = vt.load_config(p)
+    assert cfg["keys"]["dictate"] == "KEY_F9"
+    assert "config" in capsys.readouterr().out
+
+
+def test_load_config_unknown_keys_ignored(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text('[keys]\nbogus = "KEY_F1"\n\n[wat]\nx = 1\n')
+    cfg = vt.load_config(p)
+    assert "bogus" not in cfg["keys"]
+    assert "wat" not in cfg
+
+
+def test_load_config_env_overrides_toml(tmp_path, monkeypatch):
+    p = tmp_path / "config.toml"
+    p.write_text('[keys]\ndictate = "KEY_F5"\n')
+    monkeypatch.setenv("VOICE_TYPED_KEY", "KEY_F2")
+    monkeypatch.setenv("VOICE_TYPED_PASTE", "1")
+    monkeypatch.setenv("VOICE_TYPED_GRAB", "0")
+    monkeypatch.setenv("VOICE_TYPED_ENHANCE_MODEL", "gpt-x")
+    cfg = vt.load_config(p)
+    assert cfg["keys"]["dictate"] == "KEY_F2"
+    assert cfg["behavior"]["paste_mode"] is True
+    assert cfg["behavior"]["grab_keys"] is False
+    assert cfg["engines"]["enhance_model"] == "gpt-x"
+
+
+def test_dump_config_round_trips(tmp_path):
+    cfg = vt.load_config(tmp_path / "none.toml")
+    cfg["keys"]["dictate"] = "KEY_F3"
+    cfg["behavior"]["paste_mode"] = True
+    out = tmp_path / "out.toml"
+    out.write_text(vt.dump_config(cfg))
+    assert vt.load_config(out) == cfg

@@ -15,6 +15,7 @@ import subprocess
 import sys
 import threading
 import time
+import tomllib
 from pathlib import Path
 
 import requests
@@ -87,6 +88,75 @@ MAX_UTTERANCE_S = 300
 API_TIMEOUT_S = 30  # per-engine connect+read timeout, NOT total deadline
 SCREENSHOT_MODES = {"followup", "message"}
 SHOT_MAX_PX = 1568  # longest side sent to the vision model (keeps on-screen text legible)
+CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "voice-typed"
+DATA_DIR = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "voice-typed"
+CONFIG_PATH = CONFIG_DIR / "config.toml"
+DEFAULT_CONFIG = {
+    "keys": {
+        "dictate": "KEY_F9", "enhance": "KEY_F8", "followup": "KEY_F7",
+        "message": "KEY_F6", "flag": "KEY_F10",
+    },
+    "engines": {"enhance_model": "gpt-4o-mini", "api_timeout_s": 30},
+    "behavior": {
+        "paste_mode": False, "grab_keys": True,
+        "max_utterance_s": 300, "transliterate_devanagari": True,
+    },
+}
+_ENV_OVERRIDES = {
+    ("keys", "dictate"): "VOICE_TYPED_KEY",
+    ("keys", "enhance"): "VOICE_TYPED_ENHANCE_KEY",
+    ("keys", "followup"): "VOICE_TYPED_FOLLOWUP_KEY",
+    ("keys", "message"): "VOICE_TYPED_MSG_KEY",
+    ("keys", "flag"): "VOICE_TYPED_FLAG_KEY",
+    ("engines", "enhance_model"): "VOICE_TYPED_ENHANCE_MODEL",
+    ("behavior", "paste_mode"): "VOICE_TYPED_PASTE",
+    ("behavior", "grab_keys"): "VOICE_TYPED_GRAB",
+}
+
+
+def load_config(path=None):
+    """defaults < config.toml < env vars. Never raises — bad file -> defaults."""
+    cfg = {sec: dict(vals) for sec, vals in DEFAULT_CONFIG.items()}
+    p = Path(path or CONFIG_PATH)
+    try:
+        with open(p, "rb") as f:
+            user = tomllib.load(f)
+        for sec, vals in user.items():
+            if sec in cfg and isinstance(vals, dict):
+                for k, v in vals.items():
+                    if k in cfg[sec]:
+                        cfg[sec][k] = v
+    except FileNotFoundError:
+        pass
+    except (tomllib.TOMLDecodeError, OSError) as e:
+        print(f"voice-typed: bad config.toml ({e}) — using defaults", flush=True)
+    for (sec, key), env in _ENV_OVERRIDES.items():
+        v = os.environ.get(env)
+        if v is None:
+            continue
+        if key == "paste_mode":
+            cfg[sec][key] = v == "1"
+        elif key == "grab_keys":
+            cfg[sec][key] = v != "0"
+        else:
+            cfg[sec][key] = v
+    return cfg
+
+
+def dump_config(cfg):
+    """Known-schema dict -> TOML text (stdlib has no writer)."""
+    lines = []
+    for sec in ("keys", "engines", "behavior"):
+        lines.append(f"[{sec}]")
+        for k, v in cfg[sec].items():
+            if isinstance(v, bool):
+                lines.append(f"{k} = {'true' if v else 'false'}")
+            elif isinstance(v, int):
+                lines.append(f"{k} = {v}")
+            else:
+                lines.append(f'{k} = "{v}"')
+        lines.append("")
+    return "\n".join(lines)
 
 
 class TranscribeError(Exception):
