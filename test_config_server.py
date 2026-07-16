@@ -71,3 +71,41 @@ def test_loopback_origin_ok(server, tmp_path, monkeypatch):
 def test_unknown_path_404(server):
     status, _ = _req(server, "GET", "/api/nope")
     assert status == 404
+
+
+@pytest.fixture
+def user_files(tmp_path, monkeypatch):
+    """Point every vt path at tmp so API tests never touch real files."""
+    cfg_d = tmp_path / "cfg"; cfg_d.mkdir()
+    data_d = tmp_path / "data"; data_d.mkdir()
+    monkeypatch.setattr(vt, "CONFIG_DIR", cfg_d)
+    monkeypatch.setattr(vt, "DATA_DIR", data_d)
+    monkeypatch.setattr(vt, "CONFIG_PATH", cfg_d / "config.toml")
+    monkeypatch.setattr(vt, "VOCAB_PATH", cfg_d / "vocab.txt")
+    monkeypatch.setattr(vt, "CORRECTIONS_PATH", cfg_d / "corrections.txt")
+    monkeypatch.setattr(vt, "FLAGGED_PATH", data_d / "flagged.md")
+    monkeypatch.setattr(vt, "SECRETS_PATH", cfg_d / "secrets.env")
+    return cfg_d, data_d
+
+
+def test_state_shape(server, user_files):
+    cfg_d, data_d = user_files
+    (cfg_d / "vocab.txt").write_text("Kubernetes\nPostgreSQL\n")
+    (cfg_d / "corrections.txt").write_text("cloud code => Claude Code\n")
+    (cfg_d / "secrets.env").write_text("OPENAI_API_KEY=sk-supersecret\n")
+    (data_d / "flagged.md").write_text('- 2026-07-16 09:00 ⚑ "x" → \n')
+    with mock.patch.object(cs.subprocess, "run",
+                           return_value=mock.Mock(returncode=0, stdout=b"log line\n")):
+        status, body = _req(server, "GET", "/api/state")
+    assert status == 200
+    st = json.loads(body)
+    assert st["config"]["keys"]["dictate"] == "KEY_F9"
+    assert st["vocab"] == "Kubernetes\nPostgreSQL\n"
+    assert st["corrections"] == [["cloud code", "Claude Code"]]
+    assert st["flagged"] == [{"ts": "2026-07-16 09:00", "text": "x", "note": ""}]
+    assert st["service"]["active"] is True
+    assert "KEY_F9" in st["bindable"] and "KEY_F11" not in st["bindable"]
+    assert st["budget"]["max"] == vt.VOCAB_MAX_CHARS
+    assert st["budget"]["used"] == len("Vocabulary: Kubernetes, PostgreSQL")
+    assert st["keys_set"] == {"OPENAI_API_KEY": True, "GROQ_API_KEY": False}
+    assert "sk-supersecret" not in body.decode()   # key material never leaves server

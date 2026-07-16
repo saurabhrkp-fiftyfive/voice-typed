@@ -449,6 +449,25 @@ def apply_corrections(text, path=None):
     return text
 
 
+FLAG_LINE_RE = re.compile(r'^- (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) ⚑ "(.*)" →\s*(.*)$')
+
+
+def load_flagged(path=None):
+    """flagged.md -> [{ts, text, note}] for the config panel inbox."""
+    path = Path(path or FLAGGED_PATH)
+    entries = []
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return entries
+    for line in lines:
+        m = FLAG_LINE_RE.match(line.strip())
+        if m:
+            entries.append({"ts": m.group(1), "text": m.group(2),
+                            "note": m.group(3).strip()})
+    return entries
+
+
 def flag_last():
     """Append last typed utterance to flagged.md for later correction."""
     if not LAST_TEXT:

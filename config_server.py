@@ -103,8 +103,45 @@ class ConfigHandler(BaseHTTPRequestHandler):
         self._json(404, {"error": "not found"})
 
 
+def _read(path):
+    try:
+        return Path(path).read_text()
+    except OSError:
+        return ""
+
+
+def _service_state():
+    active = subprocess.run(
+        ["systemctl", "--user", "is-active", "voice-typed"], capture_output=True,
+    ).returncode == 0
+    log = subprocess.run(
+        ["journalctl", "--user", "-u", "voice-typed", "-n", "20", "--no-pager"],
+        capture_output=True,
+    ).stdout.decode(errors="replace")
+    return {"active": active, "log": log}
+
+
 def api_state():
-    return {"config": vt.load_config()}
+    vocab_prompt = vt.load_vocab()
+    cfg = vt.load_config()
+    secrets = {}
+    try:
+        secrets = vt.load_secrets()
+    except OSError:
+        pass
+    return {
+        "config": cfg,
+        "vocab": _read(vt.VOCAB_PATH),
+        "corrections": [list(p) for p in vt.load_corrections()],
+        "flagged": vt.load_flagged(),
+        "service": _service_state(),
+        "bindable": sorted(BINDABLE_KEYS),
+        "budget": {"used": len(vocab_prompt), "max": vt.VOCAB_MAX_CHARS},
+        "keys_set": {  # existence only — values never leave the server
+            "OPENAI_API_KEY": bool(secrets.get("OPENAI_API_KEY")),
+            "GROQ_API_KEY": bool(secrets.get("GROQ_API_KEY")),
+        },
+    }
 
 
 def api_config(payload):

@@ -815,3 +815,22 @@ def test_cli_logs_calls_journalctl(monkeypatch):
     with mock.patch.object(vt.subprocess, "run", return_value=mock.Mock(returncode=0)) as run:
         assert vt.cli(["logs"]) == 0
         assert run.call_args.args[0][0] == "journalctl"
+
+
+def test_load_flagged_parses_entries(tmp_path):
+    p = tmp_path / "flagged.md"
+    p.write_text(
+        '# junk header\n'
+        '- 2026-07-15 10:30 ⚑ "kube sweet" → Kubernetes Suite\n'
+        '- 2026-07-16 09:00 ⚑ "no note yet" → \n'
+        'not a flag line\n'
+    )
+    entries = vt.load_flagged(p)
+    assert entries == [
+        {"ts": "2026-07-15 10:30", "text": "kube sweet", "note": "Kubernetes Suite"},
+        {"ts": "2026-07-16 09:00", "text": "no note yet", "note": ""},
+    ]
+
+
+def test_load_flagged_missing_file_empty(tmp_path):
+    assert vt.load_flagged(tmp_path / "nope.md") == []
