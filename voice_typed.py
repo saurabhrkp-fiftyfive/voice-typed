@@ -884,8 +884,13 @@ def cli(argv=None):
     import argparse
     ap = argparse.ArgumentParser(prog="voice-typed")
     ap.add_argument("command", nargs="?", default="run",
-                    choices=["run", "status", "restart", "stop", "logs", "doctor"])
+                    choices=["run", "status", "restart", "stop", "logs", "doctor",
+                             "config"])
+    ap.add_argument("--no-browser", action="store_true")
     ns = ap.parse_args(argv)
+    if ns.command == "config":
+        import config_server
+        return config_server.run(open_browser=not ns.no_browser)
     if ns.command == "run":
         main()
         return 0

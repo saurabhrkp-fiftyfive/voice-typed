@@ -834,3 +834,12 @@ def test_load_flagged_parses_entries(tmp_path):
 
 def test_load_flagged_missing_file_empty(tmp_path):
     assert vt.load_flagged(tmp_path / "nope.md") == []
+
+
+def test_cli_config_launches_server(monkeypatch):
+    import config_server
+    called = {}
+    monkeypatch.setattr(config_server, "run",
+                        lambda open_browser=True: called.setdefault("ob", open_browser) or 0)
+    assert vt.cli(["config", "--no-browser"]) == 0
+    assert called["ob"] is False
