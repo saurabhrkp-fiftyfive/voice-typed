@@ -8,3 +8,7 @@ flagged-archive.md
 # personal word lists — start from the .template files
 vocab.txt
 corrections.txt
+
+# secrets — API keys live here, never commit
+.env
+*.env
