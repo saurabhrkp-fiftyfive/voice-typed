@@ -849,6 +849,16 @@ def main():
 REQUIRED_BINARIES = ("pw-record", "xdotool", "xclip", "notify-send", "ffmpeg")
 
 
+def _echo_cancel_active():
+    """True when the default PipeWire source is an echo-cancel node."""
+    try:
+        out = subprocess.run(["pactl", "get-default-source"],
+                             capture_output=True, check=True, timeout=5)
+        return b"echo-cancel" in out.stdout
+    except Exception:  # noqa: BLE001 — pactl missing/odd output -> treat as off
+        return False
+
+
 def doctor():
     """Offline diagnostics. Prints one line per check; returns 0/1."""
     from evdev import ecodes
@@ -900,6 +910,13 @@ def doctor():
     for ok, label, fix in checks:
         print(f"{'✅' if ok else '❌'} {label}" + ("" if ok else f"\n   fix: {fix}"))
         failed += 0 if ok else 1
+
+    # informational — echo cancellation is optional, never fails doctor
+    if _echo_cancel_active():
+        print("✅ echo-cancelled mic source (speaker bleed suppressed)")
+    else:
+        print("ℹ️ no echo cancellation — speaker audio can bleed into dictation"
+              "\n   see docs/echo-cancellation.md")
     return 1 if failed else 0
 
 

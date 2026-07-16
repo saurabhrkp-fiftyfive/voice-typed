@@ -512,7 +512,8 @@ def test_handle_utterance_enhance_failure_injects_raw(wav_file, monkeypatch):
     assert any("enhance failed" in n for n in notes)
 
 
-def test_handle_utterance_plain_never_enhances(wav_file, monkeypatch):
+def test_handle_utterance_plain_never_enhances(wav_file, tmp_path, monkeypatch):
+    monkeypatch.setattr(vt, "CONFIG_PATH", tmp_path / "none.toml")  # defaults: polish off
     monkeypatch.setattr(vt, "transcribe", lambda p: "plain")
     def boom(t):
         raise AssertionError("enhance called in plain mode")
@@ -892,6 +893,33 @@ def test_doctor_missing_keys_fails(tmp_path, monkeypatch):
     with mock.patch.object(vt.subprocess, "run", return_value=ok_run):
         with mock.patch.object(vt.shutil, "which", return_value="/usr/bin/x"):
             assert vt.doctor() == 1
+
+
+def test_echo_cancel_active_detects_default_source():
+    ec_run = mock.Mock(returncode=0, stdout=b"echo-cancel-source\n")
+    with mock.patch.object(vt.subprocess, "run", return_value=ec_run):
+        assert vt._echo_cancel_active() is True
+    plain_run = mock.Mock(returncode=0, stdout=b"alsa_input.pci-0000_00_1f.3\n")
+    with mock.patch.object(vt.subprocess, "run", return_value=plain_run):
+        assert vt._echo_cancel_active() is False
+    with mock.patch.object(vt.subprocess, "run", side_effect=OSError):
+        assert vt._echo_cancel_active() is False
+
+
+def test_doctor_echo_cancel_info_line(secrets_file, monkeypatch, capsys):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
+    monkeypatch.setattr(vt, "find_keyboards", lambda code: ([mock.Mock()], 0))
+    ok_run = mock.Mock(returncode=0, stdout=b"user input\n")
+    with mock.patch.object(vt.subprocess, "run", return_value=ok_run):
+        with mock.patch.object(vt.shutil, "which", return_value="/usr/bin/x"):
+            assert vt.doctor() == 0  # missing EC is informational, never fails
+    assert "echo-cancellation.md" in capsys.readouterr().out
+    monkeypatch.setattr(vt, "_echo_cancel_active", lambda: True)
+    with mock.patch.object(vt.subprocess, "run", return_value=ok_run):
+        with mock.patch.object(vt.shutil, "which", return_value="/usr/bin/x"):
+            assert vt.doctor() == 0
+    assert "speaker bleed suppressed" in capsys.readouterr().out
 
 
 def test_cli_status_calls_systemctl(monkeypatch):

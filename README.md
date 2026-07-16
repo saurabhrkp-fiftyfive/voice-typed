@@ -302,6 +302,17 @@ enhance/vision modes still need a cloud chat model — local STT covers
 
 ---
 
+## Dictating while audio plays (echo cancellation)
+
+Recording is never blocked by other audio (PipeWire mics are shareable), but
+speaker output — a Teams call, a video — bleeds into the mic acoustically and
+shows up as stray words. Headphones avoid it entirely; for speaker use, enable
+a system-level echo-cancelled source (WebRTC AEC, no app change): recipe in
+[docs/echo-cancellation.md](docs/echo-cancellation.md). `voice-typed doctor`
+reports whether it's active.
+
+---
+
 ## Tests
 
 ```bash
