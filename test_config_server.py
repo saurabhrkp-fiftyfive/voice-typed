@@ -143,3 +143,94 @@ def test_post_config_rejects_bad_timeout(server, user_files):
     status, _ = _req(server, "POST", "/api/config",
                      body={"engines": {"api_timeout_s": -5}})
     assert status == 422
+
+
+def test_post_words_vocab_and_corrections(server, user_files):
+    cfg_d, _ = user_files
+    status, _ = _req(server, "POST", "/api/words", body={
+        "vocab": "Kubernetes\nGraphQL\n",
+        "corrections": [["cloud code", "Claude Code"], ["zoofie", "GraphQL"]],
+    })
+    assert status == 200
+    assert (cfg_d / "vocab.txt").read_text() == "Kubernetes\nGraphQL\n"
+    assert vt.load_corrections(cfg_d / "corrections.txt") == [
+        ("cloud code", "Claude Code"), ("zoofie", "GraphQL")]
+
+
+def test_post_words_archive_flagged(server, user_files):
+    _, data_d = user_files
+    (data_d / "flagged.md").write_text(
+        '- 2026-07-15 10:30 ⚑ "keep me" → \n'
+        '- 2026-07-16 09:00 ⚑ "archive me" → fixed\n'
+    )
+    status, _ = _req(server, "POST", "/api/words",
+                     body={"archive_flagged": ["2026-07-16 09:00"]})
+    assert status == 200
+    assert [e["ts"] for e in vt.load_flagged()] == ["2026-07-15 10:30"]
+    assert "archive me" in (data_d / "flagged-archive.md").read_text()
+
+
+def test_post_words_rejects_bad_corrections_shape(server, user_files):
+    status, _ = _req(server, "POST", "/api/words",
+                     body={"corrections": ["not-a-pair"]})
+    assert status == 422
+
+
+def test_post_keys_writes_0600_and_merges(server, user_files):
+    cfg_d, _ = user_files
+    (cfg_d / "secrets.env").write_text("GROQ_API_KEY=gsk-old\n")
+    status, body = _req(server, "POST", "/api/keys",
+                        body={"OPENAI_API_KEY": "sk-new", "GROQ_API_KEY": ""})
+    assert status == 200
+    assert b"sk-new" not in body
+    s = vt.load_secrets(cfg_d / "secrets.env")
+    assert s["OPENAI_API_KEY"] == "sk-new"
+    assert s["GROQ_API_KEY"] == "gsk-old"          # empty string = leave
+    mode = (cfg_d / "secrets.env").stat().st_mode & 0o777
+    assert mode == 0o600
+
+
+def test_post_keys_rejects_unknown_field(server, user_files):
+    status, _ = _req(server, "POST", "/api/keys", body={"EVIL": "x"})
+    assert status == 422
+
+
+def test_post_service_restart(server, user_files):
+    with mock.patch.object(cs.subprocess, "run",
+                           return_value=mock.Mock(returncode=0, stdout=b"", stderr=b"")) as run:
+        status, body = _req(server, "POST", "/api/service", body={"action": "restart"})
+    assert status == 200
+    assert json.loads(body)["ok"] is True
+    assert ["systemctl", "--user", "restart", "voice-typed"] in [
+        c.args[0] for c in run.call_args_list]
+
+
+def test_post_service_rejects_unknown_action(server, user_files):
+    status, _ = _req(server, "POST", "/api/service", body={"action": "explode"})
+    assert status == 422
+
+
+def test_quit_shuts_server_down(user_files):
+    srv = cs.make_server(token="tok-test", port=0)
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    status, _ = _req(srv, "POST", "/quit")
+    assert status == 200
+    t.join(timeout=5)
+    assert not t.is_alive()
+    srv.server_close()
+
+
+def test_run_prints_url_and_serves(capsys, monkeypatch):
+    opened = {}
+    monkeypatch.setattr(cs.webbrowser, "open", lambda url: opened.setdefault("url", url))
+
+    def fake_serve(self):          # shut down immediately instead of serving
+        pass
+    monkeypatch.setattr(cs.ThreadingHTTPServer, "serve_forever", fake_serve)
+    monkeypatch.setattr(vt, "migrate_user_files", lambda *a, **k: [])
+    monkeypatch.setattr(vt, "resolve_user_paths", lambda: None)
+    assert cs.run(open_browser=True) == 0
+    out = capsys.readouterr().out
+    assert "http://127.0.0.1:" in out and "?token=" in out
+    assert opened["url"].startswith("http://127.0.0.1:")

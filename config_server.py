@@ -7,9 +7,11 @@ Security: loopback bind, per-session token, Host/Origin loopback guard."""
 import hmac
 import json
 import re
+import secrets
 import subprocess
 import threading
 import time
+import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -170,15 +172,75 @@ def api_config(payload):
 
 
 def api_words(payload):
-    return 501, {"error": "not implemented"}
+    if "corrections" in payload:
+        pairs = payload["corrections"]
+        if not all(isinstance(p, list) and len(p) == 2
+                   and all(isinstance(s, str) for s in p) and p[0].strip()
+                   for p in pairs):
+            return 422, {"error": "corrections must be [[wrong, right]...]"}
+    if "vocab" in payload and not isinstance(payload["vocab"], str):
+        return 422, {"error": "vocab must be a string"}
+
+    if "vocab" in payload:
+        vt.VOCAB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        vt.VOCAB_PATH.write_text(payload["vocab"])
+    if "corrections" in payload:
+        lines = [f"{w.strip()} => {r.strip()}" for w, r in payload["corrections"]]
+        vt.CORRECTIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        vt.CORRECTIONS_PATH.write_text("\n".join(lines) + ("\n" if lines else ""))
+    for ts in payload.get("archive_flagged") or []:
+        _archive_flag(ts)
+    return 200, {"ok": True}
+
+
+def _archive_flag(ts):
+    try:
+        lines = Path(vt.FLAGGED_PATH).read_text().splitlines(keepends=True)
+    except OSError:
+        return
+    keep, archived = [], []
+    for line in lines:
+        m = vt.FLAG_LINE_RE.match(line.strip())
+        (archived if m and m.group(1) == ts else keep).append(line)
+    if archived:
+        Path(vt.FLAGGED_PATH).write_text("".join(keep))
+        archive = Path(vt.FLAGGED_PATH).with_name("flagged-archive.md")
+        with open(archive, "a") as f:
+            f.writelines(archived)
+
+
+_ALLOWED_KEY_FIELDS = ("OPENAI_API_KEY", "GROQ_API_KEY")
 
 
 def api_keys(payload):
-    return 501, {"error": "not implemented"}
+    if any(k not in _ALLOWED_KEY_FIELDS for k in payload):
+        return 422, {"error": "unknown field"}
+    if any(not isinstance(v, str) for v in payload.values()):
+        return 422, {"error": "values must be strings"}
+    try:
+        current = vt.load_secrets()
+    except OSError:
+        current = {}
+    for field in _ALLOWED_KEY_FIELDS:
+        v = payload.get(field, "")
+        if v:
+            current[field] = v.strip()
+    path = Path(vt.SECRETS_PATH)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch(mode=0o600, exist_ok=True)
+    path.chmod(0o600)
+    path.write_text("".join(f"{k}={v}\n" for k, v in current.items()))
+    return 200, {"ok": True}
 
 
 def api_service(payload):
-    return 501, {"error": "not implemented"}
+    action = payload.get("action")
+    if action not in ("start", "stop", "restart"):
+        return 422, {"error": "action must be start|stop|restart"}
+    r = subprocess.run(["systemctl", "--user", action, "voice-typed"],
+                       capture_output=True)
+    return 200, {"ok": r.returncode == 0,
+                 "detail": r.stderr.decode(errors="replace").strip()}
 
 
 def make_server(token, port=0):
@@ -186,3 +248,30 @@ def make_server(token, port=0):
     srv.token = token
     srv.last_request = time.monotonic()
     return srv
+
+
+def run(open_browser=True, idle_timeout_s=900):
+    vt.migrate_user_files()
+    vt.resolve_user_paths()
+    token = secrets.token_urlsafe(32)
+    srv = make_server(token)
+    port = srv.server_address[1]
+    url = f"http://127.0.0.1:{port}/?token={token}"
+    print(f"voice-typed config panel: {url}\n(Ctrl-C closes it)", flush=True)
+
+    def reaper():
+        while True:
+            time.sleep(30)
+            if time.monotonic() - srv.last_request > idle_timeout_s:
+                srv.shutdown()
+                return
+    threading.Thread(target=reaper, daemon=True).start()
+    if open_browser:
+        webbrowser.open(url)
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        srv.server_close()
+    return 0
