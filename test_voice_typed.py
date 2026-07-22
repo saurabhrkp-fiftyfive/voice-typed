@@ -286,12 +286,12 @@ def test_transcribe_sends_vocab_prompt(wav_file, secrets_file, tmp_path, monkeyp
         assert "Kubernetes" in prompt and "PostgreSQL" in prompt
 
 
-def test_transcribe_no_vocab_no_prompt_key(wav_file, secrets_file, tmp_path, monkeypatch):
+def test_transcribe_no_vocab_still_sends_hinglish_steer(wav_file, secrets_file, tmp_path, monkeypatch):
     monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
     monkeypatch.setattr(vt, "VOCAB_PATH", tmp_path / "nope.txt")
     with mock.patch.object(vt.requests, "post", return_value=_resp()) as post:
         vt.transcribe(wav_file)
-        assert "prompt" not in post.call_args.kwargs["data"]
+        assert post.call_args.kwargs["data"]["prompt"] == vt.STT_HINGLISH_PROMPT
 
 
 def test_load_corrections_and_apply(tmp_path):
@@ -961,3 +961,86 @@ def test_cli_config_launches_server(monkeypatch):
                         lambda open_browser=True: called.setdefault("ob", open_browser) or 0)
     assert vt.cli(["config", "--no-browser"]) == 0
     assert called["ob"] is False
+
+
+# ---- Hinglish / script / refusal handling ----
+
+def test_transcribe_steer_precedes_vocab(wav_file, secrets_file, tmp_path, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    v = tmp_path / "vocab.txt"
+    v.write_text("HEIDI\n")
+    monkeypatch.setattr(vt, "VOCAB_PATH", v)
+    with mock.patch.object(vt.requests, "post", return_value=_resp()) as post:
+        vt.transcribe(wav_file)
+        prompt = post.call_args.kwargs["data"]["prompt"]
+        assert prompt.startswith(vt.STT_HINGLISH_PROMPT)
+        assert "HEIDI" in prompt
+
+
+def test_transliterate_skips_all_latin(secrets_file, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    with mock.patch.object(vt.requests, "post") as post:
+        assert vt.transliterate("fix the bug in main.py") == "fix the bug in main.py"
+        post.assert_not_called()  # no LLM call for Latin-only text
+
+
+def test_transliterate_romanizes_devanagari(secrets_file, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    with mock.patch.object(vt.requests, "post",
+                           return_value=_chat_resp(content="kya haal hai")) as post:
+        assert vt.transliterate("क्या हाल है") == "kya haal hai"
+        assert post.call_args.kwargs["json"]["messages"][0]["content"] == vt.TRANSLITERATE_SYSTEM
+
+
+def test_transliterate_romanizes_urdu_arabic_script(secrets_file, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    with mock.patch.object(vt.requests, "post",
+                           return_value=_chat_resp(content="kya haal hai")):
+        # Urdu/Arabic-script Hindi must trigger romanization (was passing through untouched)
+        assert vt.transliterate("کیا حال ہے") == "kya haal hai"
+
+
+def test_transliterate_refusal_falls_back_to_original(secrets_file, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    # both engines refuse -> never inject the refusal, keep original text
+    with mock.patch.object(vt.requests, "post",
+                           return_value=_chat_resp(content="I cannot assist with that.")):
+        assert vt.transliterate("क्या हाल है") == "क्या हाल है"
+
+
+def test_transliterate_keeps_mixed_when_engine_returns_hinglish(secrets_file, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    with mock.patch.object(vt.requests, "post",
+                           return_value=_chat_resp(content="mujhe ye deploy karna hai on staging")):
+        out = vt.transliterate("मुझे ये deploy करना है on staging")
+        assert out == "mujhe ye deploy karna hai on staging"
+
+
+def test_enhance_prompt_refusal_falls_back_to_next_engine(secrets_file, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    with mock.patch.object(
+        vt.requests, "post",
+        side_effect=[_chat_resp(content="I'm sorry, I can't help with that."),
+                     _chat_resp(content="clean prompt")],
+    ) as post:
+        assert vt.enhance_prompt("summarize this chart") == "clean prompt"
+        assert post.call_count == 2
+
+
+def test_enhance_prompt_all_refuse_raises(secrets_file, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    with mock.patch.object(
+        vt.requests, "post",
+        side_effect=[_chat_resp(content="I cannot assist with that."),
+                     _chat_resp(content="As an AI, I am unable to do that.")],
+    ):
+        # raises -> handle_utterance keeps the raw transcript instead of typing a refusal
+        with pytest.raises(vt.EnhanceError):
+            vt.enhance_prompt("summarize this chart")
+
+
+def test_looks_like_refusal_matches_common_openers():
+    for s in ["I cannot assist", "I'm sorry, no", "As an AI, I", "Unfortunately, I can't"]:
+        assert vt._looks_like_refusal(s)
+    for s in ["kya haal hai", "fix the login bug", "Also add a test for this"]:
+        assert not vt._looks_like_refusal(s)

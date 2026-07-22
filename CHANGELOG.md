@@ -6,6 +6,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- STT bias prompt now steers transcription toward Latin-script Hinglish and
+  tells the model to keep every word from both languages — fixes Hindi+English
+  mixed speech losing one language, and Hindi being written in Devanagari/Urdu
+  script.
+
+### Fixed
+- Romanization now also converts Urdu/Arabic-script Hindi to Roman Hinglish, not
+  only Devanagari (`NONLATIN_RE`); Arabic-script output no longer passes through
+  untouched.
+- LLM refusals ("I cannot assist…") are never injected as text: both the enhance
+  and transliterate steps detect refusal-style output and fall back to the raw
+  transcript instead of typing the refusal.
+
 ## [0.1.0] - 2026-07-17
 
 ### Added
