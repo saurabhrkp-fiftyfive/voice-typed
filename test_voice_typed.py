@@ -73,7 +73,7 @@ def test_transcribe_falls_back_to_groq(wav_file, secrets_file, monkeypatch):
 def test_transcribe_both_fail_raises(wav_file, secrets_file, monkeypatch):
     monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
     with mock.patch.object(vt.requests, "post", side_effect=[_resp(500), _resp(500)]):
-        with pytest.raises(vt.TranscribeError, match="all engines failed"):
+        with pytest.raises(vt.TranscribeError, match="all STT engines failed"):
             vt.transcribe(wav_file)
 
 
@@ -379,7 +379,7 @@ def test_enhance_prompt_both_fail_raises(secrets_file, monkeypatch):
     with mock.patch.object(
         vt.requests, "post", side_effect=[_chat_resp(500), _chat_resp(500)]
     ):
-        with pytest.raises(vt.EnhanceError, match="all engines failed"):
+        with pytest.raises(vt.EnhanceError, match="all enhance engines failed"):
             vt.enhance_prompt("fix bug")
 
 
