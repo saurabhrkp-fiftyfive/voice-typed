@@ -1,3 +1,5 @@
+import array
+import math
 import wave
 from pathlib import Path
 from unittest import mock
@@ -8,15 +10,62 @@ import requests
 import voice_typed as vt
 
 
-@pytest.fixture
-def wav_file(tmp_path):
-    p = tmp_path / "utterance.wav"
-    with wave.open(str(p), "wb") as w:
+def _write_wav(path, seconds=1.0, amplitude=6000, rate=16000, steady=False):
+    """Tone wav for the pre-STT gates.
+
+    Default shape is speech-like: 120ms bursts separated by 80ms near-silent
+    gaps, so p90/median lands well above the speech_dynamics floor. `steady=True`
+    gives a flat tone standing in for stationary room noise (dynamics ~1.0).
+    """
+    n = int(seconds * rate)
+    period = int(0.2 * rate)
+
+    def envelope(i):
+        if steady:
+            return 1.0
+        return 1.0 if (i % period) < int(0.12 * rate) else 0.02
+
+    samples = array.array("h", (
+        int(amplitude * envelope(i) * math.sin(2 * math.pi * 440 * i / rate))
+        for i in range(n)
+    ))
+    with wave.open(str(path), "wb") as w:
         w.setnchannels(1)
         w.setsampwidth(2)
-        w.setframerate(16000)
-        w.writeframes(b"\x00\x00" * 1600)  # 0.1s silence
-    return p
+        w.setframerate(rate)
+        w.writeframes(samples.tobytes())
+    return path
+
+
+@pytest.fixture(autouse=True)
+def isolate_user_files(tmp_path, monkeypatch):
+    """Point every on-disk path at an absent tmp file so no test reads the
+    developer's real config/secrets — that leaked live API calls into the suite
+    (the real config has polish_dictation = true) and made it nondeterministic.
+    Tests that need real content monkeypatch these again afterwards."""
+    for attr in ("CONFIG_PATH", "SECRETS_PATH", "CORRECTIONS_PATH", "VOCAB_PATH"):
+        monkeypatch.setattr(vt, attr, tmp_path / f"absent-{attr.lower()}")
+
+
+@pytest.fixture
+def wav_file(tmp_path):
+    return _write_wav(tmp_path / "utterance.wav")
+
+
+@pytest.fixture
+def silent_wav(tmp_path):
+    return _write_wav(tmp_path / "silent.wav", seconds=1.0, amplitude=0)
+
+
+@pytest.fixture
+def noise_wav(tmp_path):
+    """Loud but stationary — the room-noise case a loudness gate can't catch."""
+    return _write_wav(tmp_path / "noise.wav", seconds=1.5, amplitude=6000, steady=True)
+
+
+@pytest.fixture
+def tap_wav(tmp_path):
+    return _write_wav(tmp_path / "tap.wav", seconds=0.1)
 
 
 @pytest.fixture
@@ -313,6 +362,88 @@ def test_handle_utterance_applies_corrections(wav_file, monkeypatch, tmp_path):
     monkeypatch.setattr(vt, "inject", lambda t, force_paste=False: injected.append(t))
     vt.handle_utterance(wav_file, None)
     assert injected == ["Redis"]
+
+
+def _gate_probe(monkeypatch):
+    """(injected, notes, stt_calls) wired into vt for a gate test."""
+    injected, notes, stt_calls = [], [], []
+    monkeypatch.setattr(vt, "inject", lambda t, force_paste=False: injected.append(t))
+    monkeypatch.setattr(vt, "notify", notes.append)
+    monkeypatch.setattr(vt, "transcribe", lambda p: stt_calls.append(p) or "typed text")
+    return injected, notes, stt_calls
+
+
+def test_audio_stats_measures_duration_level_and_dynamics(tmp_path):
+    dur, rms, dyn = vt.audio_stats(_write_wav(tmp_path / "a.wav", seconds=1.0))
+    assert 0.99 < dur < 1.01
+    assert rms > 1000
+    assert dyn > vt.DEFAULT_CONFIG["behavior"]["speech_dynamics"]
+    assert vt.audio_stats(_write_wav(tmp_path / "b.wav", amplitude=0))[1] == 0.0
+    assert vt.audio_stats(tmp_path / "nope.wav") == (0.0, 0.0, 0.0)
+
+
+def test_audio_stats_flags_loud_stationary_noise_as_undynamic(tmp_path):
+    """Steady tone is as loud as speech — only dynamics tells them apart."""
+    _, rms, dyn = vt.audio_stats(
+        _write_wav(tmp_path / "steady.wav", seconds=1.5, steady=True))
+    assert rms > 1000
+    assert dyn < vt.DEFAULT_CONFIG["behavior"]["speech_dynamics"]
+
+
+def test_handle_utterance_short_tap_never_reaches_stt(tap_wav, monkeypatch):
+    injected, notes, stt_calls = _gate_probe(monkeypatch)
+    vt.handle_utterance(tap_wav, None)
+    assert injected == [] and stt_calls == []
+    assert any("too short" in n for n in notes)
+
+
+def test_handle_utterance_silence_never_reaches_stt(silent_wav, monkeypatch):
+    injected, notes, stt_calls = _gate_probe(monkeypatch)
+    vt.handle_utterance(silent_wav, None)
+    assert injected == [] and stt_calls == []
+    assert any("no input" in n for n in notes)
+
+
+def test_handle_utterance_loud_room_noise_never_reaches_stt(noise_wav, monkeypatch):
+    injected, notes, stt_calls = _gate_probe(monkeypatch)
+    vt.handle_utterance(noise_wav, None)
+    assert injected == [] and stt_calls == []
+    assert any("just noise" in n for n in notes)
+
+
+@pytest.mark.parametrize("artifact", ["Thank you.", "  ok  ", "[BLANK_AUDIO]", "...", "Thanks for watching!"])
+def test_handle_utterance_drops_noise_transcript(wav_file, monkeypatch, artifact):
+    injected, notes, _ = _gate_probe(monkeypatch)
+    monkeypatch.setattr(vt, "transcribe", lambda p: artifact)
+    vt.handle_utterance(wav_file, None)
+    assert injected == []
+    assert any("no speech" in n for n in notes)
+
+
+def test_looks_like_noise_keeps_real_short_dictation():
+    assert not vt._looks_like_noise("run the tests")
+    assert not vt._looks_like_noise("Redis")
+    assert vt._looks_like_noise("Thank you.")
+    assert vt._looks_like_noise("")
+
+
+def test_handle_utterance_enhance_no_speech_sentinel_injects_nothing(wav_file, monkeypatch):
+    injected, notes, _ = _gate_probe(monkeypatch)
+    monkeypatch.setattr(vt, "transcribe", lambda p: "um uh so")
+    monkeypatch.setattr(vt, "enhance_prompt",
+                        lambda t, m, timeout=30, image_path=None: "NO_SPEECH")
+    vt.handle_utterance(wav_file, None, enhance="followup")
+    assert injected == []
+    assert any("no speech" in n for n in notes)
+
+
+def test_handle_utterance_min_utterance_s_configurable(tap_wav, tmp_path, monkeypatch):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("[behavior]\nmin_utterance_s = 0.05\n")
+    monkeypatch.setattr(vt, "CONFIG_PATH", cfg)
+    injected, _, stt_calls = _gate_probe(monkeypatch)
+    vt.handle_utterance(tap_wav, None)
+    assert stt_calls and injected == ["typed text"]
 
 
 def test_flag_last_appends_to_flagged_md(tmp_path, monkeypatch):

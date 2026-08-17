@@ -164,6 +164,18 @@ def api_config(payload):
     if not isinstance(new["behavior"]["max_utterance_s"], int) \
             or new["behavior"]["max_utterance_s"] <= 0:
         return 422, {"error": "bad max_utterance_s"}
+    if not isinstance(new["behavior"]["min_utterance_s"], (int, float)) \
+            or isinstance(new["behavior"]["min_utterance_s"], bool) \
+            or not 0 <= new["behavior"]["min_utterance_s"] < new["behavior"]["max_utterance_s"]:
+        return 422, {"error": "bad min_utterance_s"}
+    if not isinstance(new["behavior"]["silence_rms"], (int, float)) \
+            or isinstance(new["behavior"]["silence_rms"], bool) \
+            or not 0 <= new["behavior"]["silence_rms"] <= 32768:
+        return 422, {"error": "bad silence_rms"}
+    if not isinstance(new["behavior"]["speech_dynamics"], (int, float)) \
+            or isinstance(new["behavior"]["speech_dynamics"], bool) \
+            or not 1 <= new["behavior"]["speech_dynamics"] <= 100:
+        return 422, {"error": "bad speech_dynamics"}
     restart = (new["keys"] != cfg["keys"] or new["engines"] != cfg["engines"]
                or new["behavior"]["grab_keys"] != cfg["behavior"]["grab_keys"])
     vt.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)

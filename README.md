@@ -164,12 +164,41 @@ grab_keys = true
 max_utterance_s = 300
 transliterate_devanagari = true
 polish_dictation = false   # F9: LLM grammar/phrasing cleanup instead of verbatim
+min_utterance_s = 0.4      # shorter hold = accidental tap, never transcribed
+silence_rms = 30           # s16 RMS below this = muted/dead input
+speech_dynamics = 2.2      # p90/p10 of window RMS below this = noise, not speech
 ```
 
 `polish_dictation = true` sends F9 dictation through a light LLM pass (the
 enhance chat model) that fixes grammar and smooths phrasing without changing
 meaning or adding content — unlike F8, it never restructures into a task
 prompt. On API failure the raw transcript is typed; text is never lost.
+
+### Silence gating
+
+A stray keypress used to cost real text: the recording reached the STT API,
+which answers silence with a canned hallucination ("Thank you.", "Thanks for
+watching!"), and on F7/F8 that fragment was then expanded — using the
+screenshot — into a plausible, entirely invented instruction. Four gates now
+stand in the way, and the first three run *before* any API call:
+
+1. `min_utterance_s` — a tap shorter than this is dropped.
+2. `silence_rms` — a muted or dead input is dropped.
+3. `speech_dynamics` — loudness alone can't spot room noise (a laptop mic can
+   idle at RMS ~1500), so the check is structural: `p90/p10` of per-window RMS.
+   Speech alternates syllables with gaps and scores well above the floor, while
+   a fan or street hum is stationary and sits near 1.
+4. A canned-phrase filter on the transcript, plus a `NO_SPEECH` sentinel the
+   enhance model returns instead of inventing content when the dictation is
+   empty.
+
+Each gate notifies why nothing was typed, so a silent drop is never a mystery.
+Thresholds are mic- and room-dependent — measure yours instead of trusting the
+defaults:
+
+```bash
+voice-typed calibrate   # samples silence then speech, suggests speech_dynamics
+```
 
 Key-binding changes need `voice-typed restart`; everything else is picked up
 per utterance.
@@ -274,8 +303,9 @@ CLI (installed to `~/.local/bin/voice-typed`):
 
 ```bash
 voice-typed status|restart|stop|logs
-voice-typed doctor    # diagnose a broken install — paste this into bug reports
-voice-typed config    # web config panel (see above)
+voice-typed doctor     # diagnose a broken install — paste this into bug reports
+voice-typed calibrate  # measure this mic's noise floor vs speech (see above)
+voice-typed config     # web config panel (see above)
 ```
 
 Service (equivalent raw commands):
