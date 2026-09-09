@@ -1182,6 +1182,8 @@ def cli(argv=None):
                              "calibrate", "config"])
     ap.add_argument("--no-browser", action="store_true")
     ns = ap.parse_args(argv)
+    # every subcommand needs the legacy-fallback paths, not just run/main()
+    resolve_user_paths()
     if ns.command == "config":
         import config_server
         return config_server.run(open_browser=not ns.no_browser)

@@ -13,6 +13,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   script.
 
 ### Fixed
+- `voice-typed doctor` no longer reports "API key configured ❌" on a working
+  install: it read the module-level paths without the legacy
+  `~/.config/secrets.env` fallback, which only `run` applied. `calibrate` and
+  `config` had the same gap; every subcommand now resolves paths.
 - Groq enhance fallback no longer 404s: `llama-3.3-70b-versatile` was
   decommissioned by Groq, so F6/F7/F8 failed on any box without an
   `OPENAI_API_KEY`. Now uses `openai/gpt-oss-120b`.
