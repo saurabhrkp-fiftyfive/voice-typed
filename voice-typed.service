@@ -4,7 +4,13 @@ PartOf=graphical-session.target
 After=graphical-session.target
 
 [Service]
-ExecStart=/usr/bin/python3 %h/scripts/voice-typed/voice_typed.py
+# Run under the 'input' group via sg so evdev keyboards are readable on the very
+# first start after install.sh runs `usermod -aG input`, without waiting for a
+# re-login. The user's login session only picks up a newly-added group after
+# logging out and back in; sg grants the group immediately (they are already
+# listed in /etc/group), so `enable --now` works right away instead of
+# crash-looping with "no readable keyboard". Harmless once the group is active.
+ExecStart=/usr/bin/sg input -c "exec /usr/bin/python3 %h/scripts/voice-typed/voice_typed.py"
 Restart=on-failure
 RestartSec=3
 

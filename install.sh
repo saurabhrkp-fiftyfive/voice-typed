@@ -125,5 +125,6 @@ echo "  keys:    hold F9 dictate · F8 enhance · F7 follow-up · F6 message · 
 echo "  config:  $CONFIG_DIR/config.toml   (or run: voice-typed config)"
 echo "  check:   voice-typed doctor"
 if [ "$NEED_RELOGIN" = 1 ]; then
-  echo "⚠ added to 'input' group — LOG OUT AND BACK IN, then: voice-typed restart"
+  echo "✓ added to 'input' group — the service already runs (it uses sg to get the"
+  echo "  group now); log out and back in when convenient so your shells get it too."
 fi
