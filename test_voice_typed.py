@@ -981,6 +981,29 @@ def test_resolve_user_paths_prefers_xdg(tmp_path, monkeypatch):
     assert vt.CORRECTIONS_PATH == legacy_corrections   # no XDG file -> legacy stays
 
 
+def test_resolve_user_paths_falls_back_to_legacy_secrets(tmp_path, monkeypatch):
+    cfg_d = tmp_path / "cfg"; cfg_d.mkdir()
+    legacy = tmp_path / "legacy-secrets.env"; legacy.write_text("GROQ_API_KEY=k\n")
+    monkeypatch.setattr(vt, "CONFIG_DIR", cfg_d)
+    monkeypatch.setattr(vt, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(vt, "LEGACY_SECRETS_PATH", legacy)
+    monkeypatch.setattr(vt, "SECRETS_PATH", cfg_d / "secrets.env")
+    vt.resolve_user_paths()
+    assert vt.SECRETS_PATH == legacy               # no XDG file -> old key still read
+
+
+def test_resolve_user_paths_prefers_xdg_secrets(tmp_path, monkeypatch):
+    cfg_d = tmp_path / "cfg"; cfg_d.mkdir()
+    xdg = cfg_d / "secrets.env"; xdg.write_text("GROQ_API_KEY=new\n")
+    legacy = tmp_path / "legacy-secrets.env"; legacy.write_text("GROQ_API_KEY=old\n")
+    monkeypatch.setattr(vt, "CONFIG_DIR", cfg_d)
+    monkeypatch.setattr(vt, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(vt, "LEGACY_SECRETS_PATH", legacy)
+    monkeypatch.setattr(vt, "SECRETS_PATH", xdg)
+    vt.resolve_user_paths()
+    assert vt.SECRETS_PATH == xdg
+
+
 def test_enhance_model_comes_from_config_toml(wav_file, secrets_file, tmp_path, monkeypatch):
     monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
     p = tmp_path / "config.toml"

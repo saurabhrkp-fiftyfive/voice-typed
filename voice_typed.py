@@ -221,7 +221,6 @@ def audio_stats(wav_path):
     # too few windows to judge structure — let the duration gate own that case
     dynamics = 0.0 if len(windows) < 10 else (p90 / p10 if p10 else 0.0)
     return duration, rms, dynamics
-SECRETS_PATH = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "voice-typed" / "secrets.env"
 LEGACY_DIR = Path(__file__).resolve().parent
 VOCAB_PATH = LEGACY_DIR / "vocab.txt"
 VOCAB_MAX_CHARS = 800  # ~200 tokens; whisper prompt cap is 224 tokens
@@ -235,6 +234,8 @@ SHOT_MAX_PX = 1568  # longest side sent to the vision model (keeps on-screen tex
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "voice-typed"
 DATA_DIR = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "voice-typed"
 CONFIG_PATH = CONFIG_DIR / "config.toml"
+SECRETS_PATH = CONFIG_DIR / "secrets.env"
+LEGACY_SECRETS_PATH = Path.home() / ".config" / "secrets.env"
 DEFAULT_CONFIG = {
     "keys": {
         "dictate": "KEY_F9", "enhance": "KEY_F8", "followup": "KEY_F7",
@@ -334,7 +335,7 @@ def migrate_user_files(config_dir=None, data_dir=None, legacy_dir=None):
 
 def resolve_user_paths():
     """Point the module path globals at XDG files when they exist."""
-    global VOCAB_PATH, CORRECTIONS_PATH, FLAGGED_PATH
+    global VOCAB_PATH, CORRECTIONS_PATH, FLAGGED_PATH, SECRETS_PATH
     for attr, kind, name in (
         ("VOCAB_PATH", "config", "vocab.txt"),
         ("CORRECTIONS_PATH", "config", "corrections.txt"),
@@ -343,6 +344,9 @@ def resolve_user_paths():
         p = (CONFIG_DIR if kind == "config" else DATA_DIR) / name
         if p.exists():
             globals()[attr] = p
+    # keys written by an older install still live in ~/.config/secrets.env
+    if not SECRETS_PATH.exists() and LEGACY_SECRETS_PATH.exists():
+        SECRETS_PATH = LEGACY_SECRETS_PATH
 
 
 class TranscribeError(Exception):

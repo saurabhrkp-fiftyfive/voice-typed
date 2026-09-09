@@ -44,12 +44,18 @@ if ! command -v apt-get >/dev/null; then
   echo "ERROR: non-apt distro. Install manually, then re-run:"
   echo "  xdotool xclip python3-evdev python3-requests python3-pil python3-pytest"
   echo "  pipewire (pw-record) libnotify ffmpeg"
+  echo "  python3-tomli (only on Python < 3.11)"
   exit 1
 fi
 
 echo "[2/8] apt deps"
 sudo apt-get install -y xdotool xclip python3-evdev python3-requests python3-pil \
   python3-pytest pipewire-bin libnotify-bin ffmpeg
+# tomllib is stdlib only from 3.11; older hosts need the tomli backport
+if ! python3 -c "import tomllib" 2>/dev/null; then
+  sudo apt-get install -y python3-tomli
+  python3 -c "import tomli" 2>/dev/null || { echo "MISSING: python3 tomli"; exit 1; }
+fi
 for bin in pw-record xdotool notify-send xclip ffmpeg; do
   command -v "$bin" >/dev/null || { echo "MISSING: $bin"; exit 1; }
 done
