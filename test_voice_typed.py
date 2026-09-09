@@ -1210,3 +1210,13 @@ def test_looks_like_refusal_matches_common_openers():
         assert vt._looks_like_refusal(s)
     for s in ["kya haal hai", "fix the login bug", "Also add a test for this"]:
         assert not vt._looks_like_refusal(s)
+
+
+def test_cli_doctor_resolves_user_paths(monkeypatch):
+    # doctor read module-level defaults, so it missed the legacy secrets fallback
+    # that resolve_user_paths() applies and reported "no API key" on a working install
+    calls = []
+    monkeypatch.setattr(vt, "resolve_user_paths", lambda: calls.append(1))
+    monkeypatch.setattr(vt, "doctor", lambda: 0)
+    assert vt.cli(["doctor"]) == 0
+    assert calls == [1]
