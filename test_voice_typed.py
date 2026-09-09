@@ -239,13 +239,25 @@ def test_inject_terminal_paste_sends_shift_chord(monkeypatch):
         assert cmds[1][-1] == "ctrl+shift+v"
 
 
-def test_start_recording_spawns_pw_record(tmp_path):
+def test_start_recording_uses_pw_record_when_available(tmp_path, monkeypatch):
+    monkeypatch.setattr(vt, "_pw_record_has_target", lambda: True)
     wav = tmp_path / "sub" / "u.wav"
     with mock.patch.object(vt.subprocess, "Popen") as popen:
         vt.start_recording(wav)
         cmd = popen.call_args.args[0]
         assert cmd[0] == "pw-record"
         assert "--rate" in cmd and "16000" in cmd
+        assert wav.parent.exists()
+
+
+def test_start_recording_falls_back_to_parecord(tmp_path, monkeypatch):
+    monkeypatch.setattr(vt, "_pw_record_has_target", lambda: False)
+    wav = tmp_path / "sub" / "u.wav"
+    with mock.patch.object(vt.subprocess, "Popen") as popen:
+        vt.start_recording(wav)
+        cmd = popen.call_args.args[0]
+        assert cmd[0] == "parecord"
+        assert "--rate=16000" in cmd
         assert wav.parent.exists()
 
 

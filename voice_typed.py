@@ -18,7 +18,10 @@ import subprocess
 import sys
 import threading
 import time
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python < 3.11 fallback
+    import tomli as tomllib
 import wave
 from pathlib import Path
 
@@ -218,7 +221,7 @@ def audio_stats(wav_path):
     # too few windows to judge structure — let the duration gate own that case
     dynamics = 0.0 if len(windows) < 10 else (p90 / p10 if p10 else 0.0)
     return duration, rms, dynamics
-SECRETS_PATH = Path.home() / ".config" / "secrets.env"
+SECRETS_PATH = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "voice-typed" / "secrets.env"
 LEGACY_DIR = Path(__file__).resolve().parent
 VOCAB_PATH = LEGACY_DIR / "vocab.txt"
 VOCAB_MAX_CHARS = 800  # ~200 tokens; whisper prompt cap is 224 tokens
@@ -664,15 +667,52 @@ def active_window():
         return None
 
 
+_pw_record_usable = None  # cached result of _pw_record_has_target()
+
+
+def _pw_record_has_target():
+    """True when pw-record can bind a capture node.
+
+    On hosts where PipeWire has no session manager, or where classic
+    PulseAudio owns the ALSA devices, pw-record has no target and fails at
+    stream time with "no node available". Detect that up front so we can fall
+    back to PulseAudio's recorder instead of exiting on the first F9.
+    """
+    global _pw_record_usable
+    if _pw_record_usable is None:
+        if not shutil.which("pw-record"):
+            _pw_record_usable = False
+        else:
+            try:
+                out = subprocess.run(
+                    ["pw-record", "--list-targets"],
+                    capture_output=True, text=True, timeout=5,
+                ).stdout
+                # bound targets are listed as "  <id>: <name>" under the header
+                _pw_record_usable = any(
+                    line.strip()[:1].isdigit() for line in out.splitlines()
+                )
+            except (OSError, subprocess.SubprocessError):
+                _pw_record_usable = False
+    return _pw_record_usable
+
+
 def start_recording(wav_path):
     wav_path = Path(wav_path)
     wav_path.parent.mkdir(parents=True, exist_ok=True)
-    return subprocess.Popen(
-        [
+    if _pw_record_has_target():
+        cmd = [
             "pw-record", "--format", "s16", "--rate", "16000",
             "--channels", "1", str(wav_path),
         ]
-    )
+    else:
+        # PipeWire exposes no capture node (e.g. a classic PulseAudio host) —
+        # fall back to PulseAudio's recorder so dictation still works.
+        cmd = [
+            "parecord", "--format=s16le", "--rate=16000",
+            "--channels=1", "--file-format=wav", str(wav_path),
+        ]
+    return subprocess.Popen(cmd)
 
 
 def stop_recording(proc):
