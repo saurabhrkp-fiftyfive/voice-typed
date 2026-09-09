@@ -16,7 +16,7 @@ daemon (`voice_typed.py`), own git repo, systemd `--user` unit.
   gpt-4o-transcribe measured ~2.5% WER vs Groq ~7.5% on this workload, hence
   primary.
 - **Enhance:** OpenAI `gpt-4o-mini` (vision-capable) → Groq
-  `llama-3.3-70b-versatile` fallback (text-only, no vision). Override model with
+  `openai/gpt-oss-120b` fallback (text-only, no vision). Override model with
   `VOICE_TYPED_ENHANCE_MODEL`.
 - Keys from `~/.config/secrets.env` (`OPENAI_API_KEY`, `GROQ_API_KEY`) — external
   to the repo.

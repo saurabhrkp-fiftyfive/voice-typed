@@ -31,7 +31,7 @@ OPENAI_URL = "https://api.openai.com/v1/audio/transcriptions"
 GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
 GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_ENHANCE_MODEL = "llama-3.3-70b-versatile"
+GROQ_ENHANCE_MODEL = "openai/gpt-oss-120b"
 
 
 def _engine_name(url):

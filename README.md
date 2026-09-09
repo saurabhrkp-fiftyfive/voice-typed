@@ -73,7 +73,7 @@ WAV (16 kHz mono, pw-record)
 ```
 transcript (+ optional screenshot)
   → OpenAI  POST /v1/chat/completions   model gpt-4o-mini   [primary, vision-capable]
-  → Groq    POST /v1/chat/completions   model llama-3.3-70b-versatile   [fallback, TEXT-ONLY]
+  → Groq    POST /v1/chat/completions   model openai/gpt-oss-120b   [fallback, TEXT-ONLY]
 temperature 0.3
 ```
 
@@ -327,7 +327,7 @@ You don't need a paid OpenAI account for dictation.
 Groq's free tier serves `whisper-large-v3` — excellent dictation quality at $0.
 Put **only** a `GROQ_API_KEY` in `~/.config/voice-typed/secrets.env` (get one at
 console.groq.com) and the STT chain uses Groq automatically. The enhance modes
-(F6/F7/F8) then fall back to Groq's `llama-3.3-70b-versatile`, which is
+(F6/F7/F8) then fall back to Groq’s `openai/gpt-oss-120b`, which is
 text-only — F9 dictation is unaffected, F6/F7 lose the screenshot grounding.
 
 ### Fully local (offline): any OpenAI-compatible Whisper server

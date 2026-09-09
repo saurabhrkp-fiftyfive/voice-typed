@@ -13,6 +13,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   script.
 
 ### Fixed
+- Groq enhance fallback no longer 404s: `llama-3.3-70b-versatile` was
+  decommissioned by Groq, so F6/F7/F8 failed on any box without an
+  `OPENAI_API_KEY`. Now uses `openai/gpt-oss-120b`.
+- Keys written by an older install (`~/.config/secrets.env`) are still read
+  after the move to `$XDG_CONFIG_HOME/voice-typed/secrets.env`.
+- `install.sh` installs `python3-tomli` on Python < 3.11, which the new
+  `tomllib` fallback needs.
+- Runs on Python 3.10 (`tomllib` fallback) and records via `parecord` on hosts
+  where PipeWire exposes no capture node. (#1)
 - Romanization now also converts Urdu/Arabic-script Hindi to Roman Hinglish, not
   only Devanagari (`NONLATIN_RE`); Arabic-script output no longer passes through
   untouched.
