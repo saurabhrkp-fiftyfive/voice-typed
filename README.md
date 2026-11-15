@@ -31,7 +31,7 @@ tune everything from the [config panel](#web-config-panel).
 | Key | Env var | Mode | LLM rewrite | Screenshot | System prompt |
 |-----|---------|------|-------------|-----------|---------------|
 | **F9** | `VOICE_TYPED_KEY` | verbatim | opt-in | no | types transcript as-is; `behavior.polish_dictation = true` adds a light grammar/phrasing cleanup (`POLISH_SYSTEM`) |
-| **F8** | `VOICE_TYPED_ENHANCE_KEY` | new-task enhance | yes | no | `ENHANCE_SYSTEM` — rewrites ramble into a structured coding-agent prompt |
+| **F8** | `VOICE_TYPED_ENHANCE_KEY` | new-task enhance | yes | no | `ENHANCE_SYSTEM` — fidelity-first rewrite: keeps every dictated detail, adds nothing, no section labels |
 | **F7** | `VOICE_TYPED_FOLLOWUP_KEY` | follow-up enhance | yes | **yes** | `FOLLOWUP_SYSTEM` (+ grounding line) — continuation message for an active agent session; the screenshot is READ-ONLY context to shape a grounded follow-up, never copied/answered as output |
 | **F6** | `VOICE_TYPED_MSG_KEY` | chat message | yes | **yes** | `MSG_SYSTEM` — natural chat/DM reply grounded in on-screen thread |
 | **F10** | `VOICE_TYPED_FLAG_KEY` | flag last | no | no | appends last utterance to `flagged.md` |
@@ -78,6 +78,12 @@ temperature 0.3
 ```
 
 - Model overridable via `VOICE_TYPED_ENHANCE_MODEL` (default `gpt-4o-mini`).
+- **Engine health:** a key that is out of credit, revoked or rate-limited is
+  benched (15 min for 401/402/403/429, 60 s for transient errors) instead of
+  being retried first on every utterance — an exhausted OpenAI balance used to
+  add a failed round trip (0.5–1.6 s) to every F8. If every engine is benched the
+  full chain is still tried, so dictation never dies. The engine that served is
+  journaled (`enhanced -> '…' via groq/openai/gpt-oss-120b`).
 - **Vision:** when a screenshot is present, the OpenAI request sends a vision
   content array — `[{type:text, text:<transcript>}, {type:image_url, image_url:{url:"data:image/png;base64,…"}}]`.
   The Groq fallback is text-only (llama-3.3-70b has no vision) and silently
@@ -306,6 +312,7 @@ voice-typed status|restart|stop|logs
 voice-typed doctor     # diagnose a broken install — paste this into bug reports
 voice-typed calibrate  # measure this mic's noise floor vs speech (see above)
 voice-typed config     # web config panel (see above)
+voice-typed preview "raw text" [--mode task|followup|message|polish]  # print the rewrite, no typing
 ```
 
 Service (equivalent raw commands):

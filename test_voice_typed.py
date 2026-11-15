@@ -47,6 +47,15 @@ def isolate_user_files(tmp_path, monkeypatch):
         monkeypatch.setattr(vt, attr, tmp_path / f"absent-{attr.lower()}")
 
 
+@pytest.fixture(autouse=True)
+def reset_engine_health():
+    """Engine cooldowns are process-global: a test that benches an engine for 15
+    minutes would silently reorder every later test's fallback path."""
+    vt._ENGINE_DOWN.clear()
+    yield
+    vt._ENGINE_DOWN.clear()
+
+
 @pytest.fixture
 def wav_file(tmp_path):
     return _write_wav(tmp_path / "utterance.wav")
@@ -553,6 +562,97 @@ def test_enhance_prompt_polish_uses_polish_system(secrets_file, monkeypatch):
     with mock.patch.object(vt.requests, "post", return_value=_chat_resp()) as post:
         vt.enhance_prompt("x", "polish")
         assert post.call_args.kwargs["json"]["messages"][0]["content"].startswith(vt.POLISH_SYSTEM)
+
+
+def test_enhance_prompt_reports_serving_engine(secrets_file, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    with mock.patch.object(vt.requests, "post",
+                           side_effect=[_chat_resp(429), _chat_resp(content="via groq")]):
+        vt.enhance_prompt("x")
+    assert vt.LAST_ENGINE == f"groq/{vt.GROQ_ENHANCE_MODEL}"
+
+
+def test_dead_engine_is_skipped_on_the_next_utterance(secrets_file, monkeypatch):
+    """An exhausted OpenAI key costs ONE failed round trip, not one per F8."""
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    with mock.patch.object(
+        vt.requests, "post",
+        side_effect=[_chat_resp(429), _chat_resp(content="via groq"), _chat_resp(content="again")],
+    ) as post:
+        vt.enhance_prompt("first")
+        vt.enhance_prompt("second")
+    assert [c.args[0] for c in post.call_args_list] == [
+        vt.OPENAI_CHAT_URL, vt.GROQ_CHAT_URL, vt.GROQ_CHAT_URL
+    ]
+
+
+def test_transient_failure_is_retried_on_the_next_utterance(secrets_file, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    monkeypatch.setattr(vt, "_ENGINE_TRANSIENT_S", 0)
+    with mock.patch.object(
+        vt.requests, "post",
+        side_effect=[_chat_resp(500), _chat_resp(content="groq"), _chat_resp(content="openai")],
+    ) as post:
+        vt.enhance_prompt("first")
+        vt.enhance_prompt("second")
+    assert [c.args[0] for c in post.call_args_list] == [
+        vt.OPENAI_CHAT_URL, vt.GROQ_CHAT_URL, vt.OPENAI_CHAT_URL
+    ]
+
+
+def test_all_engines_benched_still_tries_so_dictation_never_dies(secrets_file, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    vt._ENGINE_DOWN[vt.OPENAI_CHAT_URL] = float("inf")
+    vt._ENGINE_DOWN[vt.GROQ_CHAT_URL] = float("inf")
+    with mock.patch.object(vt.requests, "post", return_value=_chat_resp(content="still works")):
+        assert vt.enhance_prompt("x") == "still works"
+
+
+def test_refusal_does_not_bench_the_engine(secrets_file, monkeypatch):
+    """A refusal is about this utterance, not the key: the engine stays first."""
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    with mock.patch.object(vt.requests, "post", side_effect=[
+        _chat_resp(content="I'm sorry, but I can't help with that."),
+        _chat_resp(content="via groq"),
+    ]):
+        assert vt.enhance_prompt("x") == "via groq"
+    assert vt.OPENAI_CHAT_URL not in vt._ENGINE_DOWN
+
+
+def test_success_clears_a_benched_engine(secrets_file, monkeypatch):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    vt._ENGINE_DOWN[vt.OPENAI_CHAT_URL] = float("inf")
+    vt._ENGINE_DOWN[vt.GROQ_CHAT_URL] = float("inf")
+    with mock.patch.object(vt.requests, "post", return_value=_chat_resp(content="ok")):
+        vt.enhance_prompt("x")
+    assert vt.OPENAI_CHAT_URL not in vt._ENGINE_DOWN
+
+
+def test_enhance_system_forbids_summarising_and_answered_messages():
+    """Regression guards for the two field failures: over-condensing the dictation
+    (details dropped) and drafting a message the speaker only asked for."""
+    s = vt.ENHANCE_SYSTEM
+    assert "never a summary" in s
+    assert "Never merge two clauses" in s
+    assert "100% of the information" in s
+    assert "keep it a request" in s
+    assert "Never compose the message" in s
+    assert "the user wants" in s            # named as forbidden narration
+    assert "Keep deictic references exactly" in s
+    assert '"Task: <...> | Context:' not in s   # old forced-section scheme is gone
+
+
+def test_preview_prints_rewrite_and_engine(secrets_file, monkeypatch, capsys):
+    monkeypatch.setattr(vt, "SECRETS_PATH", secrets_file)
+    with mock.patch.object(vt.requests, "post", return_value=_chat_resp(content="rewritten")):
+        assert vt.preview("raw text") == 0
+    captured = capsys.readouterr()
+    assert "rewritten" in captured.out
+    assert "mode=task" in captured.err
+
+
+def test_preview_without_text_returns_usage(monkeypatch):
+    assert vt.cli(["preview"]) == 2
 
 
 def _polish_cfg(tmp_path, monkeypatch, value):

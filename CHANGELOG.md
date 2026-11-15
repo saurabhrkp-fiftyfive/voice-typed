@@ -6,6 +6,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- **F8 `ENHANCE_SYSTEM` rewritten for fidelity.** The old prompt forced every
+  output into `Task: … | Context: … | Expected output: …`, which made the model
+  manufacture section content it was never told ("Expected output: a report
+  with restart counts and timestamps", "Constraints: ready by Friday") and
+  narrate the speaker in third person ("The user needs to share a reply…").
+  Benchmarked on 23 reconstructed F8 dictations: invented content fell from
+  **44.8% → 0%** of output tokens and detail retention went **80.9% → 100%** of
+  source content terms. The new prompt keeps every dictated detail (names, IDs,
+  branches, error strings, reasons, asides, hedges), forbids invented labels and
+  third-person narration, and keeps deictic references ("this PR", "the above
+  file") intact. `voice-typed preview "…"` now shows the rewrite, engine and
+  latency without typing into a window.
+
 ### Added
 - STT bias prompt now steers transcription toward Latin-script Hinglish and
   tells the model to keep every word from both languages — fixes Hindi+English
@@ -13,6 +27,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   script.
 
 ### Fixed
+- An engine whose key is out of credit, revoked or rate-limited is benched
+  instead of being retried first on every utterance. An exhausted OpenAI balance
+  was adding a failed round trip (0.5–1.6 s) to every F8 before falling back to
+  Groq. The serving engine is now journaled with each rewrite.
 - `voice-typed doctor` no longer reports "API key configured ❌" on a working
   install: it read the module-level paths without the legacy
   `~/.config/secrets.env` fallback, which only `run` applied. `calibrate` and
