@@ -91,6 +91,12 @@ Measured on this benchmark set, both current-generation cheap models are at
 parity — the prompt is portable, the ranking is not. Per-call cost is a rounding
 error at ~1.5k input + ~180 output tokens:
 
+The `invented` figures below are from the model comparison run, which used the
+v3c prompt (plain prose, no headings) so that heading tokens could not skew the
+scores. For the shipped v4 prompt the comparable number is the 0.004 in the
+table above — same model, different prompt; the two are deliberately not the
+same run.
+
 | model | $/M in | $/M out | ~cost per F8 | measured |
 |---|---|---|---|---|
 | **`gpt-5.4-mini`** (default) | 0.75 | 4.50 | $0.0016 | recall 0.987, invented 0.021, p50 1.32 s, vision ✓ |
