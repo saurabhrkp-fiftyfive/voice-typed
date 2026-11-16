@@ -31,7 +31,7 @@ tune everything from the [config panel](#web-config-panel).
 | Key | Env var | Mode | LLM rewrite | Screenshot | System prompt |
 |-----|---------|------|-------------|-----------|---------------|
 | **F9** | `VOICE_TYPED_KEY` | verbatim | opt-in | no | types transcript as-is; `behavior.polish_dictation = true` adds a light grammar/phrasing cleanup (`POLISH_SYSTEM`) |
-| **F8** | `VOICE_TYPED_ENHANCE_KEY` | new-task enhance | yes | no | `ENHANCE_SYSTEM` — fidelity-first rewrite: keeps every dictated detail, adds nothing, no section labels |
+| **F8** | `VOICE_TYPED_ENHANCE_KEY` | new-task enhance | yes | no | `ENHANCE_SYSTEM` — fidelity-first rewrite into an adaptive `## Task / ## Context / ## Constraints / ## Expected output` prompt; keeps every dictated detail, never invents a section |
 | **F7** | `VOICE_TYPED_FOLLOWUP_KEY` | follow-up enhance | yes | **yes** | `FOLLOWUP_SYSTEM` (+ grounding line) — continuation message for an active agent session; the screenshot is READ-ONLY context to shape a grounded follow-up, never copied/answered as output |
 | **F6** | `VOICE_TYPED_MSG_KEY` | chat message | yes | **yes** | `MSG_SYSTEM` — natural chat/DM reply grounded in on-screen thread |
 | **F10** | `VOICE_TYPED_FLAG_KEY` | flag last | no | no | appends last utterance to `flagged.md` |
@@ -72,12 +72,12 @@ WAV (16 kHz mono, pw-record)
 
 ```
 transcript (+ optional screenshot)
-  → OpenAI  POST /v1/chat/completions   model gpt-4o-mini   [primary, vision-capable]
+  → OpenAI  POST /v1/chat/completions   model gpt-5.4-mini   [primary, vision-capable]
   → Groq    POST /v1/chat/completions   model openai/gpt-oss-120b   [fallback, TEXT-ONLY]
 temperature 0.3
 ```
 
-- Model overridable via `VOICE_TYPED_ENHANCE_MODEL` (default `gpt-4o-mini`).
+- Model overridable via `VOICE_TYPED_ENHANCE_MODEL` (default `gpt-5.4-mini`).
 - **Engine health:** a key that is out of credit, revoked or rate-limited is
   benched (15 min for 401/402/403/429, 60 s for transient errors) instead of
   being retried first on every utterance — an exhausted OpenAI balance used to
@@ -121,7 +121,7 @@ Pillow thumbnail → longest side SHOT_MAX_PX (1568 px)  → re-saved PNG
   vision model.
 
 **Privacy/cost note:** on F6/F7 a screenshot of the active window leaves the
-machine (sent to OpenAI). Cheap on `gpt-4o-mini`, deleted locally right after.
+machine (sent to OpenAI). Cheap on `gpt-5.4-mini`, deleted locally right after.
 
 ---
 
@@ -159,7 +159,7 @@ message  = "KEY_F6"
 flag     = "KEY_F10"
 
 [engines]
-enhance_model = "gpt-4o-mini"
+enhance_model = "gpt-5.4-mini"
 api_timeout_s = 30
 stt_url = ""      # custom/local OpenAI-compatible STT endpoint (tried first)
 stt_model = ""    # model name for that endpoint (default whisper-1)
@@ -269,7 +269,7 @@ on).
 | `VOICE_TYPED_FOLLOWUP_KEY` | `KEY_F7` | follow-up enhance key (+screenshot context) |
 | `VOICE_TYPED_MSG_KEY` | `KEY_F6` | chat-message key (+screenshot) |
 | `VOICE_TYPED_FLAG_KEY` | `KEY_F10` | flag-last key |
-| `VOICE_TYPED_ENHANCE_MODEL` | `gpt-4o-mini` | enhance model override |
+| `VOICE_TYPED_ENHANCE_MODEL` | `gpt-5.4-mini` | enhance model override |
 | `VOICE_TYPED_PASTE` | unset | `1` = always clipboard-paste instead of typing |
 | `VOICE_TYPED_GRAB` | `1` | `0` disables X11 key-grab (enhance keys otherwise swallowed from apps) |
 
@@ -426,7 +426,7 @@ README.md
 - **2026-07-12** — hotplug rescan: `/dev/input` re-enumerated on dir-mtime
   change (BT reconnect / dongle re-plug picked up live).
 - **2026-07-15** — F7 follow-up + F6 chat-message modes with **active-window
-  screenshot → vision grounding** (gpt-4o-mini). Then: enhance spelling guard,
+  screenshot → vision grounding** (gpt-5.4-mini). Then: enhance spelling guard,
   post-enhance re-correction, screenshot cap raised to 1568 px.
 - **2026-07-16** — productization: `config.toml` + XDG user files, `voice-typed`
   CLI (`doctor`, service controls), installer v2 with uninstall, **web config

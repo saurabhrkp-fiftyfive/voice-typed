@@ -7,6 +7,23 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Changed
+- **F8 `ENHANCE_SYSTEM`: structure restored, invention still zero.** v3c fixed
+  the invented-section problem by dropping the sectioned format, which also made
+  F8 return plain prose — the structure is the point of the mode, so it is back:
+  `## Task / ## Context / ## Constraints / ## Expected output`, with the hard rule
+  that a heading whose body cannot be built from the speaker's own words must not
+  appear. Short single-ask dictation still returns one flat line
+  ("Analyze our repository."). Measured on 23 reconstructed F8 dictations with
+  `gpt-5.4-mini`: invented content 0.4% (the old forced template: 44.8%), detail
+  retention 97.7%, drafted-instead 0, p50 1.33 s. The model used
+  `Task` 20/23, `Context` 12/23, `Constraints` 6/23 and never invented an
+  `Expected output` section (the old prompt invented one almost every call).
+- **Default enhance model is now `gpt-5.4-mini`** (was `gpt-4o-mini`, a 2024
+  model). Benchmarked against `gpt-5.4-nano`: recall 0.987 vs 0.990, invented
+  0.021 vs 0.008, p50 1.32 s vs 1.39 s — parity, so the tie goes to the one that
+  accepts screenshots for F6/F7 grounding. `VOICE_TYPED_ENHANCE_MODEL` still
+  overrides it.
+
 - **F8 `ENHANCE_SYSTEM` rewritten for fidelity.** The old prompt forced every
   output into `Task: … | Context: … | Expected output: …`, which made the model
   manufacture section content it was never told ("Expected output: a report
