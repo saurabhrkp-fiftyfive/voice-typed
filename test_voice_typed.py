@@ -478,6 +478,17 @@ def test_flag_last_appends_to_flagged_md(tmp_path, monkeypatch):
     assert any("flagged" in n for n in notes)
 
 
+def test_flag_last_multiline_enhance_stays_one_entry(tmp_path, monkeypatch):
+    """F8 output is multi-line; flagged.md is one entry per line."""
+    monkeypatch.setattr(vt, "FLAGGED_PATH", tmp_path / "flagged.md")
+    monkeypatch.setattr(vt, "LAST_TEXT", "## Task\nRebuild QA.\n\n## Context\nOld bundle.")
+    monkeypatch.setattr(vt, "notify", lambda m: None)
+    vt.flag_last()
+    entries = vt.load_flagged(tmp_path / "flagged.md")
+    assert len(entries) == 1
+    assert entries[0]["text"] == "## Task Rebuild QA. ## Context Old bundle."
+
+
 def test_flag_last_empty_notifies_no_file(tmp_path, monkeypatch):
     monkeypatch.setattr(vt, "FLAGGED_PATH", tmp_path / "flagged.md")
     monkeypatch.setattr(vt, "LAST_TEXT", "")
@@ -508,7 +519,7 @@ def test_enhance_prompt_openai_request_shape(secrets_file, monkeypatch):
         assert call.args[0] == vt.OPENAI_CHAT_URL
         assert call.kwargs["headers"]["Authorization"] == "Bearer sk-test"
         body = call.kwargs["json"]
-        assert body["model"] == "gpt-4o-mini"
+        assert body["model"] == "gpt-5.4-mini"
         assert body["messages"][0]["role"] == "system"
         assert body["messages"][1] == {"role": "user", "content": "fix bug"}
         assert call.kwargs["timeout"] == vt.API_TIMEOUT_S
@@ -629,17 +640,31 @@ def test_success_clears_a_benched_engine(secrets_file, monkeypatch):
 
 
 def test_enhance_system_forbids_summarising_and_answered_messages():
-    """Regression guards for the two field failures: over-condensing the dictation
-    (details dropped) and drafting a message the speaker only asked for."""
+    """Regression guards for the failures found in the field: over-condensing the
+    dictation (details dropped), inventing section content, and drafting a message
+    the speaker only asked for."""
     s = vt.ENHANCE_SYSTEM
-    assert "never a summary" in s
-    assert "Never merge two clauses" in s
+    low = s.lower()
+    assert "never a summary" in low
+    assert "never merge two clauses" in low
     assert "100% of the information" in s
-    assert "keep it a request" in s
-    assert "Never compose the message" in s
-    assert "the user wants" in s            # named as forbidden narration
-    assert "Keep deictic references exactly" in s
-    assert '"Task: <...> | Context:' not in s   # old forced-section scheme is gone
+    assert "must not appear" in low          # no section without speaker support
+    assert "keep it a request" in low
+    assert "never compose the message" in low
+    assert "the user wants" in low           # named as forbidden narration
+    assert "keep deictic references exactly" in low
+
+
+def test_enhance_system_offers_structure_but_only_grounded_structure():
+    """F8 must produce a structured prompt again (it regressed to plain prose),
+    without returning to the old forced template that invented content."""
+    s = vt.ENHANCE_SYSTEM
+    for heading in ("## Task", "## Context", "## Constraints", "## Expected output"):
+        assert heading in s, heading
+    assert "A heading whose body you cannot build from the speaker's own words" in s
+    assert "single direct line, no headings" in s      # short dictation stays flat
+    assert "Task: <...> | Context:" not in s            # old one-line template is gone
+    assert "no newline characters" not in s             # multi-line is expected now
 
 
 def test_preview_prints_rewrite_and_engine(secrets_file, monkeypatch, capsys):
@@ -989,7 +1014,7 @@ def test_load_config_missing_file_returns_defaults(tmp_path):
     cfg = vt.load_config(tmp_path / "none.toml")
     assert cfg["keys"]["dictate"] == "KEY_F9"
     assert cfg["keys"]["flag"] == "KEY_F10"
-    assert cfg["engines"]["enhance_model"] == "gpt-4o-mini"
+    assert cfg["engines"]["enhance_model"] == "gpt-5.4-mini"
     assert cfg["behavior"]["paste_mode"] is False
     assert cfg["behavior"]["grab_keys"] is True
 

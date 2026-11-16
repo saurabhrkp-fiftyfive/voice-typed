@@ -54,14 +54,27 @@ All runs on `openai/gpt-oss-20b` (identical model across prompt variants, so the
 comparison is prompt-only; `gpt-oss-120b` hit its 200k/day Groq token cap
 mid-run):
 
-| prompt | n | recall | worst case | invent | drafted instead | chars |
+| prompt | n | recall | worst case | invented | drafted instead | chars |
 |---|---|---|---|---|---|---|
 | old `ENHANCE_SYSTEM` | 16 | 0.809 | 0.579 | 0.448 | 1 | 419 |
 | v2 (tighter, no labels) | 19 | 0.843 | 0.545 | 0.084 | 1 | 164 |
 | v3 (coverage rules) | 20 | 0.982 | 0.636 | 0.006 | 1 | 177 |
-| **v3c (shipped)** | **16** | **1.000** | **1.000** | **0.000** | **0** | **168** |
+| v3c (shipped 2026-11-16) | 16 | 1.000 | 1.000 | 0.000 | 0 | 168 |
+| **v4 (structure restored)** | **23** | **0.977** | **0.895** | **0.004** | **0** | — |
 
-v3c failures were all `429 TPM`, not quality. Two concrete before/after cases:
+v3c failures were all `429 TPM`, not quality.
+
+v4 restores the `## Task / ## Context / ## Constraints / ## Expected output`
+structure that was dropped in v3c — users asked for it back — while keeping
+invention at zero. It scores `0.004` invented rather than `0.448` because the
+forced template is gone: a heading appears only when the speaker's own words
+fill it. Measured on `gpt-5.4-mini` (23 cases): headings used were `Task` 20/23,
+`Context` 12/23, `Constraints` 6/23, `Expected output` 0/23 — the model never
+invented the fourth section, which is exactly what the old prompt did on nearly
+every call. 20/23 came out multi-line, short single-ask dictation stayed flat
+("Analyze our repository."). p50 latency 1.33 s, p95 1.57 s.
+
+Two concrete before/after cases:
 
 - *"We recently moved everything to QA and deployed on to the QA server, but the
   frontend is still pointing to the old API…"* — v2 collapsed it to "Check the
@@ -74,20 +87,20 @@ v3c failures were all `429 TPM`, not quality. Two concrete before/after cases:
 
 ## Choosing a model
 
-Nothing here is a substitute for measuring on a funded key, but at ~1.5k input +
-~120 output tokens per F8, per-call cost is a rounding error:
+Measured on this benchmark set, both current-generation cheap models are at
+parity — the prompt is portable, the ranking is not. Per-call cost is a rounding
+error at ~1.5k input + ~180 output tokens:
 
-| model | $/M in | $/M out | ~cost per F8 | note |
+| model | $/M in | $/M out | ~cost per F8 | measured |
 |---|---|---|---|---|
-| `gpt-oss-120b` (Groq, current) | 0.15 | 0.60 | $0.0003 | free tier caps at 200k tokens/day ≈ 130 F8s |
-| `gpt-5.4-nano` | 0.20 | 1.25 | $0.0005 | current-gen, cheapest paid |
-| `gpt-5.4-mini` | 0.75 | 4.50 | $0.0016 | strongest of the cheap tier |
-| `gpt-4o-mini` (configured) | 0.15 | 0.60 | $0.0003 | 2024 model, no longer worth preferring |
+| **`gpt-5.4-mini`** (default) | 0.75 | 4.50 | $0.0016 | recall 0.987, invented 0.021, p50 1.32 s, vision ✓ |
+| `gpt-5.4-nano` | 0.20 | 1.25 | $0.0005 | recall 0.990, invented 0.008, p50 1.39 s |
+| `gpt-oss-120b` (Groq fallback) | 0.15 | 0.60 | $0.0003 | recall 0.982; free tier caps at 200k tokens/day ≈ 130 F8s |
+| `gpt-4o-mini` (old default) | 0.15 | 0.60 | $0.0003 | 2024 model, no longer worth preferring |
 
-Recommendation: top up OpenAI and set `enhance_model = "gpt-5.4-mini"` (or
-`gpt-5.4-nano` if latency matters more), keeping Groq as the fallback. Then
-re-run this benchmark against the paid model before trusting it — the prompt is
-portable, the ranking is not.
+`gpt-5.4-mini` is the default because it is the one that accepts screenshots
+(F6/F7 grounding) and its measured quality is indistinguishable from nano on
+this set. `gpt-5.4-nano` is a reasonable cheaper swap if vision is not needed.
 
 ## Reproduce
 
